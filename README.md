@@ -48,7 +48,7 @@ Then open Claude Code and say `/nsls-setmeup` to connect your tools and optional
 | **/google-drive** | Google Drive file management |
 | **/google-slides-api** | Edit existing Google Slides via API |
 | **/gws** | Google Workspace Sheets CLI |
-| **/quicknote** | Draft your weekly Signal quick note from what you actually did — your Claude sessions first, plus the calendar, Slack, Fathom, Asana and daily notes you choose |
+| **/quicknote** | Draft your weekly Signal quick note from what you actually did — your Claude sessions first, plus the calendar, Slack, email, Fathom, Asana and daily notes you choose |
 | **/netlify-deploy** | Deploy and preview static pages |
 | **/deployment-guide** | How to deploy to Railway, Airtable, GAS, Cloudflare |
 | **/nsls-auth** | Wire "Sign in with NSLS" SSO into any NSLS-controlled app via auth.nsls.org (web, mobile, Netlify static sites) |
@@ -226,7 +226,7 @@ They form a cycle: `/data-model-discovery` explores a new system → maps it aga
 | **gdoc-build** | Build nicely-formatted NSLS/Society Google Docs (real tables, branded headers) |
 | **google-drive** | Google Drive file management |
 | **google-slides-api** | Edit existing Google Slides via API |
-| **quicknote** | Draft your weekly Signal quick note from your Claude sessions, calendar, Slack, Fathom, Asana and daily notes |
+| **quicknote** | Draft your weekly Signal quick note from your Claude sessions, calendar, Slack, email, Fathom, Asana and daily notes |
 | **netlify-deploy** | Deploy and preview static pages |
 | **pydoc-pipeline** | Generate documentation from Python code |
 | **gws** | Google Workspace Sheets CLI |

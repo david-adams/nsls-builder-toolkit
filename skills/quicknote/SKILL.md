@@ -2,8 +2,8 @@
 name: quicknote
 description: >-
   Draft your weekly Signal quick note from what you actually did — your Claude
-  Code sessions first, plus whichever of Google Calendar, Slack, Fathom, Asana
-  and daily notes you choose. Works whether or not you use open-day/close-day.
+  Code sessions first, plus whichever of Google Calendar, Slack, email, Fathom,
+  Asana and daily notes you choose. Works whether or not you use open-day/close-day.
   Use when someone says "quicknote", "quick note", "draft my quick note",
   "weekly notes", "Signal notes", "what did I do this week", "what did I work
   on", or is answering Signal's Friday "Take some quick notes on your week"
@@ -29,18 +29,23 @@ to them unless something breaks and they need it to get unstuck.
 ## Step 0 — Sources (first run, or "change my quicknote sources")
 
 Settings live in `~/.config/nsls/quicknote.json`. If the file exists and the person
-didn't ask to change it, read it and skip to Step 1.
+didn't ask to change it, read it and skip to Step 1 — unless it has no `email_asked`
+field (it was saved before email was an option): then ask once, *"Want me to look at
+your sent email too?"*, add `"email"` to `sources` on a yes, set `"email_asked": true`
+either way, and carry on.
 
 Otherwise ask with **AskUserQuestion**, two multi-select questions in one call:
 
 1. *"Where does your work show up?"* — **Claude Code sessions (Recommended)** · Google
    Calendar · Slack · Asana
-2. *"Any of these as well?"* — Fathom meeting notes · Daily notes (Obsidian, including
-   open-day and close-day)
+2. *"Any of these as well?"* — Email (Gmail) · Fathom meeting notes · Daily notes
+   (Obsidian, including open-day and close-day)
 
 If they pick Google Calendar, use **only their work calendar** — the one on their
 @nsls.org address. Never read a personal calendar unless they name it themselves: a
 personal appointment is not work, and it has no place in a note their manager reads.
+
+If they pick Email, read **only their @nsls.org work mailbox**, never a personal one.
 
 If they pick Daily notes, find the vault: the `OBSIDIAN_VAULT_PATH` environment
 variable, else the personal toolkit's `.env`, else ask once. Save the values you
@@ -48,7 +53,7 @@ actually resolved — their real calendar address and the real vault path — ne
 placeholders in this example. `vault` stays `null` only when Daily notes wasn't chosen:
 
 ```json
-{"sources": ["claude_sessions", "calendar", "daily_notes"], "calendars": ["jdoe@nsls.org"], "vault": "/Users/jdoe/Obsidian/Work", "created": "YYYY-MM-DD"}
+{"sources": ["claude_sessions", "calendar", "email", "daily_notes"], "calendars": ["jdoe@nsls.org"], "vault": "/Users/jdoe/Obsidian/Work", "email_asked": true, "created": "YYYY-MM-DD"}
 ```
 
 On later runs, if a chosen source's saved value is missing (no calendar, or Daily notes
@@ -83,6 +88,13 @@ which sources actually ran.
 - **Slack** — messages the person sent in the window. Look for decisions, things they
   unblocked, thanks they received, and their last quick note to Signal (so finished
   wins aren't repeated and percentages move on instead of restarting).
+- **Email** — the person's work Gmail, read only. Search their **sent** mail in the
+  window (`in:sent after:YYYY/MM/DD before:YYYY/MM/DD`, where `before` is the day after
+  the window ends), then open the threads that look like work. Look for things they
+  delivered, decisions they made, and replies thanking them or confirming something
+  landed. Skip newsletters, notifications, calendar replies, auto-generated mail and
+  anything personal. Email is where confidential matter most often turns up — screen it
+  hard in Step 3. Never draft, send, label or archive anything.
 - **Fathom** — meetings in the window that the person attended or recorded (the list
   also returns colleagues' calls they weren't in — skip those); read at most five
   summaries. Decisions and commitments beat attendance.
@@ -102,8 +114,8 @@ excerpts are raw. Before drafting, drop anything about:
 - the person's own personal life, side projects or non-NSLS work
 
 If you're not sure whether something belongs in a note their manager will read, leave
-it out and ask about it in one line under the draft. Never quote a session's raw text
-into the note — summarise the work in your own words.
+it out and ask about it in one line under the draft. Never quote a session's or an email's raw
+text into the note — summarise the work in your own words.
 
 ## Step 4 — Write the note
 
