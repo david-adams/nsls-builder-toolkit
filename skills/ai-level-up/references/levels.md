@@ -32,6 +32,7 @@ Adapted in our own words from Every's guide, [The Eight Levels of AI Adoption](h
 - **The output keeps needing heavy fixes.** Drop one level, or add the check from the level you're on.
 - **The task touches member or student data, money or public NSLS content, and nothing checks the result.** That's over-reach: add the check before handing over more.
 - **It would be quicker to do it yourself.** That's a fine answer. Say so.
+- **A risk the person knowingly accepted is not a miss.** If they said so ("I accept the risk"), don't judge the session `lower` for it and don't raise it again.
 - **A scheduled helper acts on its own.** If someone set one up without technical help and it sends messages, edits records or touches member data, judge it `lower` (handed over too much). Read-only briefs and personal admin are fine.
 
 ## What each surface can reach

@@ -6,9 +6,13 @@ Standard library only, Python 3.8+. Everything is written under the private
 state folder (~/.ai-level-up, or AI_LEVEL_UP_DIR). The one optional network
 call reads your own Builder stage from the NSLS tracker.
 
-  digest.py scan [--days 7] [--max-per-surface 8] [--no-tracker]
+  digest.py scan [--since-last] [--days N] [--max-per-surface 30] [--no-tracker]
   digest.py render REPORT.json [--no-record] [--open]
   digest.py config [frequency=weekly|monthly|never|ask] [tracker_lookup=true|false] [email=you@nsls.org]
+
+A plain scan is a fresh check-in: it looks back 7 days and widens to 14, then 30,
+until it finds 30 sessions the person drove. --since-last reads only what is new
+since the last check-in: new sessions first, then new turns in older sessions.
 """
 import argparse
 import datetime as dt
@@ -30,18 +34,46 @@ RAW_CAP = 20000           # longest human turn we parse; the rest is ignored
 TURN_CHARS = 260          # kept per human turn in a digest
 TURNS_HEAD, TURNS_TAIL = 12, 6
 SKIM_MAX = 60             # one-line summaries of sessions not read closely
+SAMPLE_SIZE = 30          # sessions read closely per surface
+WIDEN_DAYS = (7, 14, 30)  # a fresh check-in widens its window until it finds SAMPLE_SIZE sessions
+TASKS_MAX = 60            # judged sessions the report draws (two surfaces at most)
 QUOTE_WORDS = 15
 STAGES = ("Explorer", "Maker", "Builder", "Architect", "Steward")
 FREQUENCIES = ("weekly", "monthly", "never", "ask")
 DIRECTIONS = ("up", "same+check", "down", "habit")
-BEHAVIOURS = [  # (habit, share of claude.ai chats showing it in Anthropic's AI Fluency Index, Jan 2026, D)
-    ("Iterates and refines", 85.7, "Description"), ("Shows an example of good", 41.1, "Description"),
-    ("Specifies format", 30.0, "Description"), ("Sets how the AI should work", 30.0, "Delegation"),
-    ("Gives tone and style", 22.7, "Description"), ("Names who it's for", 17.6, "Description"),
-    ("States the goal first", 51.1, "Delegation"), ("Asks for the approach first", 10.1, "Delegation"),
-    ("Fills in missing context", 20.3, "Discernment"), ("Pushes back on reasoning", 15.8, "Discernment"),
-    ("Checks facts that matter", 8.7, "Discernment"),
+BEHAVIOURS = [  # (habit, share of claude.ai chats showing it in Anthropic's AI Fluency Index, Jan 2026)
+    ("Iterates and refines", 85.7), ("Shows an example of good", 41.1), ("Specifies format", 30.0),
+    ("Sets how the AI should work", 30.0), ("Gives tone and style", 22.7), ("Names who it's for", 17.6),
+    ("States the goal first", 51.1), ("Asks for the approach first", 10.1), ("Fills in missing context", 20.3),
+    ("Pushes back on reasoning", 15.8), ("Checks facts that matter", 8.7),
 ]
+HABIT_HELP = [  # (what it means, a quick example), in BEHAVIOURS order
+    ("You go back and forth to improve the answer instead of taking the first draft.",
+     "After a first draft: “Shorter, and put the ask in the first line.”"),
+    ("You show what good looks like: a past email, a template, a sample row.",
+     "Paste last term's welcome email and say “match this tone and length”."),
+    ("You say what shape the answer should take.",
+     "“A table with three columns: chapter, contact, next step.”"),
+    ("You tell it how to work with you: ask first, flag doubts, don't guess.",
+     "“Ask before you change anything, and flag anything you're unsure of.”"),
+    ("You say how it should sound.",
+     "“Warm and short, for busy chapter advisers.”"),
+    ("You say who will read it.",
+     "“This is for first-year members who've never heard of us.”"),
+    ("You open with what you want to get done, before the details.",
+     "“Goal: a one-page brief Kevin can approve in five minutes.”"),
+    ("You ask for the plan before it starts the work.",
+     "“Before you start, tell me how you'd approach this.”"),
+    ("You notice what it doesn't know and give it the missing piece.",
+     "“You're missing that the event moved to Zoom. Redo the invite.”"),
+    ("You question its reasoning when something doesn't add up.",
+     "“Why did you drop the March numbers? Show me your working.”"),
+    ("You check the facts that matter before relying on them.",
+     "“Which source says 40% of members renewed? Link it.”"),
+]
+NEAR = 10                 # points either side of typical that count as "about typical"
+BIG_GAP = 15              # points below typical that get flagged as a big gap (top 3 at most)
+PLACEHOLDER = re.compile(r"<[^<>\n]{1,60}>|\{[^{}\n]{1,60}\}|\[(?!(?:email|ssn|phone|id|number|REDACTED)\b)[a-z][^\[\]\n]{1,60}\]")
 
 
 # ---------------------------------------------------------------- locations and private files
@@ -369,7 +401,7 @@ def blank_session(surface, sid):
         "pasted_blocks": 0, "pasted_chars": 0, "images": 0, "permission_modes": {},
         "peer_messages_in": 0, "untimed_skipped": 0, "automated": False,
         "automation_reason": None, "secret_flags": set(), "signals": new_signals(),
-        "is_self": False, "slots": set(),
+        "is_self": False, "slots": set(), "earlier": False,
     }
 
 
@@ -388,6 +420,7 @@ def ingest_line(s, o, since):
         s["untimed_skipped"] += 1
         return
     if ts < since:
+        s["earlier"] = True  # the session started before this window: only its new part is read
         return
     if s["project"] is None and o.get("cwd"):
         s["project"] = safe(os.path.basename(str(o["cwd"]).rstrip("/\\")), 60) or None
@@ -628,20 +661,26 @@ def aggregate(sessions):
     return agg
 
 
+def driven(sessions):
+    return [s for s in sessions if not s["automated"] and s["turns"]]
+
+
 def sample(sessions, k):
-    """Pick up to k sessions a person actually drove: varied in project and length."""
-    pool = [s for s in sessions if not s["automated"] and len(s["turns"]) >= 3]
+    """Pick up to k sessions a person actually drove: new sessions before ones carried over
+    from an earlier window, then varied in project and length."""
+    pool = [s for s in driven(sessions) if len(s["turns"]) >= 3]
     if len(pool) < k:
-        pool = [s for s in sessions if not s["automated"] and s["turns"]]
-    pool.sort(key=lambda s: (-len(s["turns"]), s["id"]))
+        pool = driven(sessions)
+    pool.sort(key=lambda s: (s["earlier"], -len(s["turns"]), s["id"]))
     picked, projects = [], set()
     for s in pool:  # one per project first, longest first
         if len(picked) < k and s["project"] not in projects:
             picked.append(s)
             projects.add(s["project"])
-    rest = [s for s in pool if s not in picked]
-    while len(picked) < k and rest:  # then fill, alternating long and short
-        picked.append(rest.pop(0 if len(picked) % 2 else -1))
+    for earlier in (False, True):  # then fill, alternating long and short, new sessions first
+        rest = [s for s in pool if s not in picked and s["earlier"] == earlier]
+        while len(picked) < k and rest:
+            picked.append(rest.pop(0 if len(picked) % 2 else -1))
     picked.sort(key=lambda s: s["start"] or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
     return picked
 
@@ -657,6 +696,7 @@ def shape(s, num):
         "surface": s["surface"],
         "title": s["title"], "project": s["project"],
         "start": s["start"].isoformat() if s["start"] else None,
+        "continued": s["earlier"],
         "active_days": len({t["t"][:10] for t in s["turns"]}),
         "human_turns": len(s["turns"]),
         "interruptions": s["interruptions"], "pasted_blocks": s["pasted_blocks"], "images": s["images"],
@@ -719,6 +759,8 @@ def clean_run(run):
     out = {"date": date if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else dt.date.today().isoformat()}
     wd = run.get("window_days")
     out["window_days"] = wd if isinstance(wd, int) and 1 <= wd <= 366 else None
+    covered = parse_ts(run.get("covered_to"))
+    out["covered_to"] = covered.isoformat() if covered else None
     out["stage"] = run.get("stage") if run.get("stage") in STAGES else None
     seen = run.get("seen_counts") if isinstance(run.get("seen_counts"), dict) else {}
     out["seen"] = {k: seen[k] for k in ("code", "cowork", "chat") if isinstance(seen.get(k), int)}
@@ -794,14 +836,13 @@ ICON = {
     "chev": '<svg class="chev" width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4l5 5-5 5"/></svg>',
     "check": '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 9.5l3.5 3.5 7.5-8"/></svg>',
     "flag": '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 18V3"/><path d="M5 3.5h9l-2 3.5 2 3.5H5"/></svg>',
-    "ladder": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M7 2v18M15 2v18M7 6h8M7 11h8M7 16h8"/></svg>',
-    "sliders": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h14M4 11h14M4 16h14"/><circle cx="8" cy="6" r="1.8" fill="currentColor"/><circle cx="14" cy="11" r="1.8" fill="currentColor"/><circle cx="10" cy="16" r="1.8" fill="currentColor"/></svg>',
-    "bars": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 5h12M3 11h16M3 17h8"/></svg>',
-    "spark": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3v4M11 15v4M3 11h4M15 11h4M6 6l2 2M14 14l2 2M16 6l-2 2M8 14l-2 2"/></svg>',
-    "wrench": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 4.5a4 4 0 00-5 5L3 15l2 2 5.5-5.5a4 4 0 005-5l-2.5 2.5-2-2z"/></svg>',
+    "stairs": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18.5h4.5v-4h4v-4h4v-4H19"/></svg>',
+    "chart": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 3.5v15h15"/><path d="M7 7.5h9M7 11.5h5.5M7 15.5h10.5"/></svg>',
+    "scale": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3.5v15M7.5 18.5h7M4.5 6.5h13"/><path d="M4.5 6.5l-2.3 5.2h4.6zM17.5 6.5l-2.3 5.2h4.6z"/></svg>',
+    "pin": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.5h6M9.3 3.5v5.2L6.5 12h9l-2.8-3.3V3.5M11 12v6.5"/></svg>',
     "screens": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="17" height="11" rx="2"/><path d="M8 18.5h6"/></svg>',
-    "list": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 6h11M8 11h11M8 16h11"/><circle cx="4" cy="6" r=".8"/><circle cx="4" cy="11" r=".8"/><circle cx="4" cy="16" r=".8"/></svg>',
     "info": '<svg class="sym" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="8.5"/><path d="M11 10v5.5M11 6.6v.2"/></svg>',
+    "i": '<svg class="i" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M8 7.2v4M8 4.9v.1"/></svg>',
 }
 
 
@@ -843,9 +884,10 @@ def sentence(v):
     return v[:1].upper() + v[1:]
 
 
-def fold(icon, title, sub, body, open_=False):
-    return ('<details class="fold"%s><summary>%s<span class="t"><strong>%s</strong><span>%s</span></span>%s</summary>'
-            '<div class="fold-body">%s</div></details>') % (" open" if open_ else "", ICON[icon], esc(title), sub, ICON["chev"], body)
+def fold(icon, title, sub, body, open_=False, anchor=None):
+    return ('<details class="fold"%s%s><summary>%s<span class="t"><strong>%s</strong><span>%s</span></span>'
+            '<span class="toggle" aria-hidden="true">%s</span></summary><div class="fold-body">%s</div></details>') % (
+        ' id="%s"' % anchor if anchor else "", " open" if open_ else "", ICON[icon], esc(title), sub, ICON["chev"], body)
 
 
 def stage_track(r):
@@ -876,34 +918,74 @@ def stage_track(r):
     return '<section aria-label="Builder stage on record">%s<ol class="stages">%s</ol>%s</section>' % (head, "".join(items), unlock)
 
 
-def behaviour_rows(r):
+def habit_rows(r):
     beh = r.get("behaviours") if isinstance(r.get("behaviours"), dict) else {}
+    rows = []
+    for i, (name, typ) in enumerate(BEHAVIOURS, 1):
+        got = ratio(beh.get(str(i)))
+        if got:
+            you = 100.0 * got[0] / got[1]
+            rows.append({"i": i, "name": name, "typ": typ, "got": got, "you": you, "diff": you - typ})
+    return rows
+
+
+def habit_groups(rows):
+    """(ahead, to improve, about typical), each sorted biggest difference first."""
+    ahead = sorted((x for x in rows if x["diff"] >= NEAR), key=lambda x: -x["diff"])
+    grow = sorted((x for x in rows if x["diff"] <= -NEAR), key=lambda x: x["diff"])
+    par = sorted((x for x in rows if -NEAR < x["diff"] < NEAR), key=lambda x: x["diff"])
+    return ahead, grow, par
+
+
+AXIS = ('<div class="hb-axis" aria-hidden="true"><span></span><div class="hb-scale">%s</div></div>' % "".join(
+    '<span style="left:%d%%">%d%s</span>' % (v, v, "%" if v == 100 else "") for v in (0, 25, 50, 75, 100)))
+
+
+def habit_row(x, prev, notes, big):
+    i = x["i"]
+    was = ratio(prev.get(str(i)))
+    tip = "You: %d of %d sessions" % x["got"] + (" (last time %d of %d)" % was if was else "")
+    what, example = HABIT_HELP[i - 1]
+    mine = safe(notes.get(str(i)) or "", 300)
+    pop = ('<div id="habit-%d" popover class="pop"><h4>%s</h4><p>%s</p><p><strong>Example:</strong> %s</p>%s'
+           '<button type="button" class="pop-close" popovertarget="habit-%d" popovertargetaction="hide">Close</button></div>') % (
+        i, esc(x["name"]), esc(what), esc(example),
+        '<p><strong>From your week:</strong> %s</p>' % esc(mine) if mine else "", i)
+    return ('<div class="hb-row%s"><div class="hb-name"><button type="button" class="hb-btn" popovertarget="habit-%d">%s%s</button>%s</div>'
+            '<div class="hb-bars"><div class="hb-line you" tabindex="0" aria-label="%s">'
+            '<span class="hb-trk"><span class="fill you" style="width:%.1f%%"></span><span class="tip" style="left:%.0f%%">%s</span></span>'
+            '<span class="hb-pct num">%.0f%%</span></div>'
+            '<div class="hb-line typ"><span class="hb-trk thin"><span class="fill typ" style="width:%.1f%%"></span></span>'
+            '<span class="hb-pct num soft">typical %.0f%%</span></div></div></div>%s') % (
+        " big" if big else "", i, esc(x["name"]), ICON["i"], '<span class="badge">Big gap</span>' if big else "",
+        esc(tip), x["you"], min(x["you"], 60), esc(tip), x["you"], x["typ"], x["typ"], pop)
+
+
+def habits_section(r, n_tasks):
+    rows = habit_rows(r)
+    ahead, grow, par = habit_groups(rows)
     prev = (r.get("previous") or {}).get("behaviours") if isinstance(r.get("previous"), dict) else {}
     prev = prev if isinstance(prev, dict) else {}
-    rows, ahead, counted = [], 0, 0
-    for i, (name, typ, d) in enumerate(BEHAVIOURS, 1):
-        got = ratio(beh.get(str(i)))
-        if not got:
-            continue
-        counted += 1
-        you = 100.0 * got[0] / got[1]
-        diff = you - typ
-        ahead += diff >= 5
-        word = "ahead" if diff >= 5 else "behind" if diff <= -5 else "about typical"
-        tick, was = "", ratio(prev.get(str(i)))
-        if was:
-            tick = '<span class="prev" style="left:%.1f%%" title="Last check-in: %d of %d"></span>' % (100.0 * was[0] / was[1], was[0], was[1])
-        rows.append(
-            '<div class="bar-row"><div class="bar-label">%s<small>%s</small></div>'
-            '<div><div class="tracks" title="You: %d of %d (%.0f%%) · Typical: %.0f%%">'
-            '<div class="trk"><div class="fill you" style="width:%.1f%%"></div>%s</div>'
-            '<div class="trk thin"><div class="fill typ" style="width:%.1f%%"></div></div></div>'
-            '<div class="vals num"><span>You %d of %d · %.0f%%</span><span>Typical %.0f%%</span></div></div>'
-            '<div class="delta num">%s %s%d<small>%s</small></div></div>' % (
-                esc(name), esc(d), got[0], got[1], you, typ, you, tick, typ, got[0], got[1], you, typ,
-                "▲" if diff >= 5 else "▼" if diff <= -5 else "≈", "+" if diff > 0 else "−" if diff < 0 else "",
-                abs(round(diff)), word))
-    return rows, ahead, counted
+    notes = r.get("habit_notes") if isinstance(r.get("habit_notes"), dict) else {}
+    big = {x["i"] for x in [x for x in grow if -x["diff"] >= BIG_GAP][:3]}  # grow is biggest gap first
+
+    def group(title, sub, items):
+        if not items:
+            return ""
+        return '<div class="hb-group"><h4>%s <span class="soft">· %d</span></h4>%s%s%s</div>' % (
+            title, len(items), '<p class="soft hb-sub">%s</p>' % sub if sub else "", AXIS,
+            "".join(habit_row(x, prev, notes, x["i"] in big) for x in items))
+    legend = ('<div class="legend"><span><span class="key" style="background:var(--you)"></span>You</span>'
+              '<span><span class="key" style="background:var(--typical)"></span>Typical: share of chats showing the habit in Anthropic\'s study</span></div>'
+              '<p class="soft hb-how">Click a habit to see what it means, with an example. Hover over your bar to see the count.</p>')
+    body = (legend + group("Ahead of typical", "", ahead)
+            + group("Habits to improve", "Below typical by %d points or more, biggest gap first." % NEAR, grow)
+            + group("About typical", "Within %d points of typical." % NEAR, par)
+            + ('<p class="soft">With fewer than 8 sessions, read these as rough.</p>' if 0 < n_tasks < 8 else ""))
+    sub = " · ".join(p for p in ("%d ahead of typical" % len(ahead) if ahead else "",
+                                 "%d to improve" % len(grow) if grow else "",
+                                 "%d about typical" % len(par) if par else "") if p)
+    return sub, body
 
 
 FIT_WORDS = {"right": "Right level for the stakes", "higher": "Could have handed over more",
@@ -911,59 +993,72 @@ FIT_WORDS = {"right": "Right level for the stakes", "higher": "Could have handed
 FIT_GLYPH = {"right": "✓", "higher": "↑", "lower": "↓", "other": "·"}
 
 
+def lvl(i):
+    return "%d (%s)" % (i + 1, LEVELS[i][0])
+
+
+def and_join(items):
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def levels_section(tasks, scores):
-    """Plain bar chart: one row per level, bar length = sessions there, colour = whether the level fit.
-    The count links to the sessions behind it. Sessions are never numbered, so only levels carry numbers."""
+    """One bar per level: length = sessions there, colour = whether the level fit the stakes.
+    Each count opens the sessions behind it, right under the bar. Sessions are never numbered."""
     placed = [(t, level_index(t.get("level"))) for t in tasks]
     counts = [sum(1 for _, li in placed if li == i) for i in range(len(LEVELS))]
     top = max(counts + [1])
-    rows, groups = [], []
+    rows = []
     for i, (name, what) in enumerate(LEVELS):
         group = [t for t, li in placed if li == i]
         if i == 4:
             rows.append('<div class="lv-divide" aria-hidden="true">Levels 5–8: usually set up with a technical colleague</div>')
-        segs = "".join('<span class="seg %s" style="width:%.1f%%" title="%d: %s"></span>' % (
-            f, 100.0 * k / top, k, FIT_WORDS[f])
-            for f, k in ((f, sum(fit_of(t) == f for t in group)) for f in ("right", "higher", "lower", "other")) if k)
-        value = ('<a href="#level-%d">%d session%s</a>' % (i + 1, len(group), "" if len(group) == 1 else "s")
-                 if group else '<span class="none">0</span>')
-        rows.append('<div class="lv-row%s"><div class="lv-name"><span class="lv-num">Level %d</span>%s<small>%s</small></div>'
-                    '<div class="lv-track">%s</div><div class="lv-val num">%s</div></div>' % (
-                        "" if group else " empty", i + 1, esc(name), esc(what), segs, value))
-        if group:
-            items = "".join(
-                '<li><span class="fit %s" aria-hidden="true">%s</span><div><strong>%s</strong><br>'
-                '<span class="fit-word">%s%s.</span> <span class="soft">%s</span>%s</div></li>' % (
-                    fit_of(t), FIT_GLYPH[fit_of(t)], text(t.get("session"), 60),
-                    esc(FIT_WORDS[fit_of(t)]),
-                    (" (better: %s)" % esc(LEVELS[level_index(t.get("better_level"))][0]))
-                    if fit_of(t) in ("higher", "lower") and level_index(t.get("better_level")) is not None else "",
-                    text(t.get("why") or t.get("verdict") or "", 240), checked_line(t)) for t in group)
-            groups.append('<div class="lv-group" id="level-%d"><h4>Level %d · %s: %d session%s</h4><ul>%s</ul></div>' % (
-                i + 1, i + 1, esc(name), len(group), "" if len(group) == 1 else "s", items))
+        segs = "".join('<span class="seg %s" style="width:%.1f%%"></span>' % (f, 100.0 * k / top)
+                       for f, k in ((f, sum(fit_of(t) == f for t in group)) for f in ("right", "higher", "lower", "other")) if k)
+        label = '<span class="lv-name"><span class="lv-num">Level %d</span>%s<small>%s</small></span>' % (i + 1, esc(name), esc(what))
+        track = '<span class="lv-track">%s</span>' % segs
+        if not group:
+            rows.append('<div class="lv-row empty"><div class="lv-grid">%s%s<span class="lv-val num"><span class="none">0</span></span></div></div>'
+                        % (label, track))
+            continue
+        items = "".join(
+            '<li><span class="fit %s" aria-hidden="true">%s</span><div><strong>%s</strong><br>'
+            '<span class="fit-word">%s%s.</span> <span class="soft">%s</span>%s</div></li>' % (
+                fit_of(t), FIT_GLYPH[fit_of(t)], text(t.get("session"), 60),
+                esc(FIT_WORDS[fit_of(t)]),
+                (" (better: %s)" % esc(LEVELS[level_index(t.get("better_level"))][0]))
+                if fit_of(t) in ("higher", "lower") and level_index(t.get("better_level")) is not None else "",
+                text(t.get("why") or t.get("verdict") or "", 240), checked_line(t)) for t in group)
+        rows.append('<details class="lv-row"><summary><span class="lv-grid">%s%s<span class="lv-val num">'
+                    '<span class="lv-count">%d session%s</span>%s</span></span></summary><ul class="lv-sessions">%s</ul></details>' % (
+                        label, track, len(group), "" if len(group) == 1 else "s", ICON["chev"], items))
     head = ""
     if "right_level" in scores:
-        x, y = scores["right_level"]
-        head = '<p class="lv-head"><strong>%d of %d sessions</strong> were at the right level for what was at stake.</p>' % (x, y)
+        head = '<p class="lv-head">%d of %d sessions were at the right level for what was at stake.</p>' % scores["right_level"]
     used = [li for _, li in placed if li is not None]
-    span = ""
+    facts = ""
     if used:
         lo, hi = min(used), max(used)
-        mostly = max(set(used), key=lambda i: (used.count(i), -i))
-        above = sorted({li for t, li in placed if li is not None and li > mostly and fit_of(t) == "right"})
-        verdict = "Mostly level %d (%s)" % (mostly + 1, esc(LEVELS[mostly][0]))
-        if above:
-            verdict += ", with the beginnings of level %d (%s)" % (above[0] + 1, esc(LEVELS[above[0]][0]))
-        span = ('<p class="lv-verdict"><strong>%s.</strong> Your range this time: level %d (%s) to level %d (%s).</p>'
-                '<p class="soft">Higher isn\'t better: each task needs the level that fits what\'s at stake. '
-                'For most staff, levels 1–4 are the sweet spot.</p>' % (verdict, lo + 1, esc(LEVELS[lo][0]), hi + 1, esc(LEVELS[hi][0])))
+        if lo == hi:
+            facts = "<li><strong>All at level %s</strong></li>" % esc(lvl(lo))
+        else:
+            mostly = [i for i, c in enumerate(counts) if c == max(counts)]
+            if len(mostly) > 2:
+                verdict = "Spread evenly across %d levels" % len(mostly)
+            else:
+                verdict = "Mostly level%s %s" % ("s" if len(mostly) > 1 else "", and_join([lvl(i) for i in mostly]))
+                above = sorted({li for t, li in placed if li is not None and li > max(mostly) and fit_of(t) == "right"})
+                if above:
+                    verdict += ", with the beginnings of level%s %s" % ("s" if len(above) > 1 else "", and_join([lvl(i) for i in above]))
+            facts = "<li><strong>Range: level %s to level %s</strong></li><li>%s.</li>" % (esc(lvl(lo)), esc(lvl(hi)), esc(verdict))
+    note = ('<p class="lv-note"><strong>Higher isn\'t better.</strong> Each task needs the level that fits what\'s at stake. '
+            'For most staff, levels 1–4 are the sweet spot.</p>')
     present = {fit_of(t) for t, _ in placed}
     none = lambda f: "" if f in present else ' <span class="soft">(none this time)</span>'
     legend = ('<div class="legend"><span><span class="key seg-key right"></span>Right level for the stakes%s</span>'
               '<span><span class="key seg-key higher"></span>Could have handed over more%s</span>'
               '<span><span class="key seg-key lower"></span>Handed over too much%s</span></div>') % (none("right"), none("higher"), none("lower"))
-    return (head + span + legend + '<div class="lv-chart">%s</div>' % "".join(rows)
-            + '<h3 class="why-h">The sessions behind each bar</h3>%s' % "".join(groups))
+    return (head + ('<ul class="lv-facts">%s</ul>' % facts if facts else "") + note + legend
+            + '<div class="lv-chart">%s</div><p class="soft lv-hint">Click a count to see the sessions behind it.</p>' % "".join(rows))
 
 
 def checked_line(t):
@@ -982,17 +1077,29 @@ SCOPE = {
     "project": ("This project's chats only.",
                 "For your chats outside projects, run this check-in outside any project. For another project, run it inside that one."),
 }
-WHERE_TO_RUN = ("Where to run your check-in: in Claude Code it covers all your Claude Code work on that computer. "
-                "In claude.ai it covers your chats outside projects, and inside a project it covers that project.")
+WHERE_TO_RUN = ("In Claude Code, a check-in covers all your Claude Code work on that computer. In claude.ai, it covers "
+                "your chats outside projects; inside a project, it covers that project only.")
+
+
+def short_date(v):
+    d = parse_ts(v) if v else None
+    return "%d %s" % (d.day, d.strftime("%b")) if d else None
 
 
 def scope_card(r):
     mode = r.get("mode") if r.get("mode") in SCOPE else "local"
     covered, hint = SCOPE[mode]
-    read = len([t for t in (r.get("tasks") or []) if isinstance(t, dict)])
+    read = len([t for t in (r.get("tasks") or []) if isinstance(t, dict)][:TASKS_MAX])
     unit = "session" if mode == "local" else "chat"
-    sample = ("<p class=\"scope-lead\"><strong>%d %s%s read closely</strong>, picked to cover different projects and kinds of work.</p>"
-              % (read, unit, "" if read == 1 else "s")) if read else ""
+    since = short_date(r.get("since_date")) if r.get("basis") == "since-last" else None
+    days = r.get("window_days") if isinstance(r.get("window_days"), int) else None
+    if since:
+        how = ": everything new since your last check-in on %s." % esc(since)
+    elif days:
+        how = " from the last %d days, picked to cover different projects and kinds of work." % days
+    else:
+        how = ", picked to cover different projects and kinds of work."
+    sample = ('<p class="scope-lead"><strong>%d %s%s read closely</strong>%s</p>' % (read, unit, "" if read == 1 else "s", how)) if read else ""
     note = '<p class="scope-hint">%s</p>' % esc(hint) if hint else ""
     return ('<section class="scope" aria-label="Scope"><span class="eyebrow">What this check-in covered</span>'
             '<p class="scope-what"><span class="sc" aria-hidden="true">✓</span>%s</p>%s%s</section>' % (esc(covered), sample, note))
@@ -1006,17 +1113,17 @@ TILES = [  # (score key, eyebrow, what the number counts)
 
 
 def compute_scores(r):
-    tasks = [t for t in (r.get("tasks") or []) if isinstance(t, dict)][:12]
+    tasks = [t for t in (r.get("tasks") or []) if isinstance(t, dict)][:TASKS_MAX]
     judged = [t for t in tasks if fit_of(t) != "other"]
     checked = [t for t in tasks if isinstance(t.get("checked"), bool)]
-    _, ahead, counted = behaviour_rows(r)
+    rows = habit_rows(r)
     scores = {}
     if judged:
         scores["right_level"] = (sum(fit_of(t) == "right" for t in judged), len(judged))
     if checked:
         scores["checks"] = (sum(t["checked"] for t in checked), len(checked))
-    if counted:
-        scores["habits_ahead"] = (ahead, counted)
+    if rows:
+        scores["habits_ahead"] = (len(habit_groups(rows)[0]), len(rows))
     return scores
 
 
@@ -1040,69 +1147,112 @@ def tiles(r):
             now_share, then_share = x / float(y), was[0] / float(was[1])
             mark = "▲" if now_share > then_share + 0.01 else "▼" if now_share < then_share - 0.01 else "="
             change = '<div class="was">%s from %d of %d last time</div>' % (mark, was[0], was[1])
+        more = ""
+        if key == "habits_ahead" and y > x:
+            more = '<a class="tile-link" href="#habits">See the %d you could improve →</a>' % (y - x)
         out.append('<div class="tile"><span class="eyebrow">%s</span><div class="big num">%d<small> of %d</small></div>'
-                   '<div class="what">%s</div>%s</div>' % (esc(eyebrow), x, y, esc(what), change))
+                   '<div class="what">%s</div>%s%s</div>' % (esc(eyebrow), x, y, esc(what), change, more))
     return '<div class="tiles">%s</div>' % "".join(out) if out else ""
+
+
+def is_template(v):
+    return bool(PLACEHOLDER.search(str(v or "")))
+
+
+def report_problems(r):
+    """What the skill must fix before the page is drawn: every experiment names the real session it
+    replays, and a template prompt (one with blanks) comes with an example filled in from that session."""
+    probs = []
+    for n, x in enumerate([x for x in (r.get("experiments") or []) if isinstance(x, dict)][:3], 1):
+        if not str(x.get("from") or "").strip():
+            probs.append('experiment %d: add "from", the real session it replays (e.g. "7 Oct · meeting agenda")' % n)
+        if is_template(x.get("prompt")):
+            example = str(x.get("example") or "").strip()
+            if not example:
+                probs.append('experiment %d: the prompt is a template (it has blanks), so add "example": '
+                             'the same prompt filled in for the session in "from"' % n)
+            elif is_template(example):
+                probs.append("experiment %d: the example still has blanks; fill each one in from the real session" % n)
+    return probs
+
+
+def experiment_card(i, x):
+    d = x.get("direction") if x.get("direction") in DIRECTIONS else "same+check"
+    src = safe(x.get("from") or "", 80)
+    template = is_template(x.get("prompt"))
+    example = ""
+    if x.get("example"):
+        example = '<span class="pr-label">%s</span><div class="prompt example">%s</div>' % (
+            esc("Filled in for " + src if src else "An example from your week"), esc(mask(x["example"])[:1500]))
+    return ('<li class="step"><span class="marker">%d</span><div class="step-card"><div class="step-body">'
+            '<span class="dir">%s</span><h3>%s</h3><p class="soft">%s</p>%s'
+            '<span class="pr-label">%s</span><div class="prompt">%s</div>%s'
+            '<p class="teach">Not sure how? Say &ldquo;walk me through %d&rdquo; and we\'ll practise it on a real task.</p></div>'
+            '<div class="done-strip">%s<p><span class="done-label">Your check</span>%s</p></div></div></li>') % (
+        i, esc(DIRECTION_LABEL[d]), text(x.get("title"), 120), text(x.get("why"), 500),
+        '<p class="from">From your week: <strong>%s</strong></p>' % esc(src) if src else "",
+        "Template: fill in the blanks" if template else "Copy this", esc(mask(x.get("prompt") or "")[:1500]), example,
+        i, ICON["check"], text(sentence(x.get("check")), 300))
+
+
+def about_section(r):
+    items = [("Where to run it.", WHERE_TO_RUN)]
+    if (r.get("mode") or "local") == "local":
+        items.append(("Fresh or since last time.", "Ask any time for a fresh check-in on up to %d recent sessions. "
+                      "Scheduled check-ins read only what's new since the last one." % SAMPLE_SIZE))
+    items += [("Where “typical” comes from.", "Anthropic's study of claude.ai chats in January 2026. Your sessions are "
+               "different work, so treat the comparison as a guide, not a grade."),
+              ("Private.", "Made from your own sessions. Nobody else sees it unless you share it.")]
+    return '<ul class="about">%s</ul>' % "".join("<li><strong>%s</strong> %s</li>" % (esc(a), esc(b)) for a, b in items)
 
 
 def render_body(r):
     parts = []
-    parts.append('<header><span class="eyebrow">AI check-in · %s · last %s days</span><h1>How you\'re working with AI</h1></header>'
-                 % (text(r.get("date"), 20), text(r.get("window_days"), 5)))
+    since = short_date(r.get("since_date")) if r.get("basis") == "since-last" else None
+    span = ("since %s" % since) if since else ("last %s days" % safe(r.get("window_days"), 5))
+    parts.append('<header><span class="eyebrow">AI check-in · %s · %s</span><h1>How you\'re working with AI</h1></header>'
+                 % (text(r.get("date"), 20), esc(span)))
     parts.append(scope_card(r))
     parts.append(stage_track(r))
-    tasks = [t for t in (r.get("tasks") or []) if isinstance(t, dict)][:12]
+    tasks = [t for t in (r.get("tasks") or []) if isinstance(t, dict)][:TASKS_MAX]
     scores = compute_scores(r)
-    rows, ahead, counted = behaviour_rows(r)
     parts.append(tiles(r))
 
-    since = [x for x in (r.get("since_last") or []) if x][:4]
-    if since:
+    since_items = [x for x in (r.get("since_last") or []) if x][:4]
+    if since_items:
         parts.append('<section class="card since"><span class="eyebrow">Since last time</span><ul>%s</ul></section>'
-                     % "".join("<li>%s</li>" % text(x, 300) for x in since))
+                     % "".join("<li>%s</li>" % text(x, 300) for x in since_items))
 
     exps = [x for x in (r.get("experiments") or []) if isinstance(x, dict)][:3]
     if exps:
-        steps = []
-        for i, x in enumerate(exps, 1):
-            d = x.get("direction") if x.get("direction") in DIRECTIONS else "same+check"
-            steps.append(
-                '<li class="step"><span class="marker">%d</span><div class="step-card"><div class="step-body">'
-                '<span class="dir">%s</span><h3>%s</h3><p class="soft">%s</p><div class="prompt">%s</div>'
-                '<p class="teach">Not sure how? Say &ldquo;walk me through %d&rdquo; and we\'ll practise it on a real task.</p></div>'
-                '<div class="done-strip">%s<p><span class="done-label">Your check</span>%s</p></div></div></li>' % (
-                    i, esc(DIRECTION_LABEL[d]), text(x.get("title"), 120), text(x.get("why"), 500),
-                    esc(mask(x.get("prompt") or "")[:1500]), i, ICON["check"], text(sentence(x.get("check")), 300)))
         parts.append('<section><span class="eyebrow">Try this week</span><h2>%d thing%s to try</h2><ol class="trail">%s</ol></section>'
-                     % (len(exps), "" if len(exps) == 1 else "s", "".join(steps)))
+                     % (len(exps), "" if len(exps) == 1 else "s", "".join(experiment_card(i, x) for i, x in enumerate(exps, 1))))
 
     folds = []
     if tasks:
         top = max(range(len(LEVELS)), key=lambda i: sum(level_index(t.get("level")) == i for t in tasks))
         sub = ("%d of %d sessions at the right level for what was at stake" % scores["right_level"]
                if "right_level" in scores else "Mostly level %d, %s" % (top + 1, LEVELS[top][0]))
-        folds.append(fold("sliders", "Ways of working", esc(sub), levels_section(tasks, scores), open_=True))
-    if counted:
-        legend = '<div class="legend"><span><span class="key" style="background:var(--you)"></span>You</span><span><span class="key" style="background:var(--typical)"></span>Typical</span>%s</div>' % (
-            '<span><span class="key" style="background:var(--ink);width:2px;border-radius:0"></span>Last check-in</span>' if isinstance(r.get("previous"), dict) and r["previous"].get("behaviours") else "")
-        body = legend + '<div class="bars">%s</div><p class="soft">"Typical" is the share of claude.ai chats showing each habit in Anthropic\'s study.%s</p>' % (
-            "".join(rows), " With fewer than 8 sessions, read these as rough." if 0 < len(tasks) < 8 else "")
-        folds.append(fold("bars", "Your habits vs typical", "Ahead of typical on %d of %d" % (ahead, counted), body))
+        folds.append(fold("stairs", "Ways of working", esc(sub), levels_section(tasks, scores), open_=True))
+    if habit_rows(r):
+        sub, body = habits_section(r, len(tasks))
+        folds.append(fold("chart", "Your habits vs typical", esc(sub), body, open_=True, anchor="habits"))
     else:
-        folds.append(fold("bars", "Your habits vs typical", "Too few sessions to compare this week", '<p class="soft">Come back after a busier week.</p>'))
+        folds.append(fold("chart", "Your habits vs typical", "Too few sessions to compare this time",
+                          '<p class="soft">Come back after a busier week.</p>', anchor="habits"))
     strengths = [x for x in (r.get("strengths") or []) if isinstance(x, dict)][:2]
     edges = [x for x in (r.get("edges") or []) if isinstance(x, dict)][:2]
     if strengths or edges:
         col = lambda items, label, cls: "".join('<div class="note %s"><span class="eyebrow">%s</span>%s%s</div>' % (
             cls, label, text(x.get("text"), 400), quote(x.get("quote"), x.get("ref"))) for x in items)
-        folds.append(fold("spark", "Strengths and gaps", "%d strength%s · %d to grow" % (
+        folds.append(fold("scale", "Strengths and gaps", "%d strength%s · %d to grow" % (
             len(strengths), "" if len(strengths) == 1 else "s", len(edges)),
             '<div class="pair"><div>%s</div><div>%s</div></div>' % (col(strengths, "Strong", ""), col(edges, "Worth growing", "grow"))))
     fix = r.get("fix") if isinstance(r.get("fix"), dict) else None
     if fix and fix.get("line"):
-        folds.append(fold("wrench", "Make one fix stick", text(fix.get("summary") or fix.get("pattern"), 90),
+        folds.append(fold("pin", "Make one fix stick", text(fix.get("summary") or fix.get("pattern"), 90),
                           '<p>%s</p><div class="prompt">%s</div><p class="soft">Where it goes: %s. Nothing in your files has been changed. To add it, tell Claude "add that fix".</p>' % (
-                              text(fix.get("pattern"), 600), text(fix.get("line"), 300), text(fix.get("where"), 300))))
+                              text(fix.get("pattern"), 600), text(fix.get("line"), 300), text(str(fix.get("where") or "").rstrip(". "), 300))))
     surfaces = [s for s in (r.get("surfaces") or []) if isinstance(s, dict)][:3]
     if surfaces:
         body = []
@@ -1112,15 +1262,14 @@ def render_body(r):
                 if isinstance(p, dict):
                     body.append("<p><strong>%s</strong> %s</p>%s" % (text(p.get("label"), 40), text(p.get("text"), 400), quote(p.get("quote"), p.get("ref"))))
         folds.append(fold("screens", "Where you work", esc(", ".join(safe(s.get("name"), 40) for s in surfaces)), "".join(body)))
-    about = "".join("<p>%s</p>" % text(r[k], 800) for k in ("paradox", "method") if r.get(k))
-    if about:
-        folds.append(fold("info", "About this check-in", "What was read, and one pattern to watch", about))
+    folds.append(fold("info", "About this check-in", "What it can see, and where to run it", about_section(r)))
     parts.append('<section><span class="eyebrow">Dig deeper</span>%s</section>' % "".join(folds))
 
-    parts.append("<footer>Your Builder stage comes from the NSLS Automation Tracker (Kevin's rubric). "
-                 "“Ways of working” are adapted from Every's eight levels of AI adoption, and the habits "
-                 "from Anthropic's AI Fluency Index. This report was made from your own sessions. Nobody else "
-                 "sees it unless you share it. %s<br>%s</footer>" % (text(r.get("schedule_line") or "", 300), esc(WHERE_TO_RUN)))
+    sched = text(r.get("schedule_line") or "", 300)
+    parts.append("<footer>%s<p>Sources: your Builder stage comes from the NSLS Automation Tracker (Kevin's rubric); "
+                 "“ways of working” are adapted from Every's eight levels of AI adoption; the habits come from "
+                 "Anthropic's AI Fluency Index.</p><p class=\"contact\">Questions or ideas about this check-in? Send them to Davo Wood.</p></footer>"
+                 % ("<p>%s</p>" % sched if sched else ""))
     return "\n".join(parts)
 
 
@@ -1139,7 +1288,15 @@ def cmd_render(args):
         sys.exit("report template missing: %s" % template_path())
     if shell.count("{{BODY}}") != 1:
         sys.exit("report template must contain the body slot exactly once")
+    problems = report_problems(report)
+    if problems:
+        sys.exit("fix needed before the report is drawn:\n" + "\n".join("  - " + p for p in problems))
     head, _, tail = shell.partition("{{BODY}}")
+    if not report.get("covered_to"):  # where this check-in's reading stopped, for the next --since-last
+        latest = load_json(digest_path(), {})
+        made = parse_ts(latest.get("generated")) if isinstance(latest, dict) else None
+        if made and dt.datetime.now(dt.timezone.utc) - made < dt.timedelta(days=3):
+            report["covered_to"] = (latest.get("window") or {}).get("to")
     date = str(report.get("date") or "")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         date = dt.date.today().isoformat()
@@ -1169,21 +1326,50 @@ def open_file(path):
 
 # ---------------------------------------------------------------- commands
 
-def cmd_scan(args):
-    now = dt.datetime.now(dt.timezone.utc)
-    since = now - dt.timedelta(days=args.days)
-    cfg = load_config()
-    notes, surfaces, digests, skims = [], {}, [], []
-    email = known_email(cfg)
+def gather(since, email, notes):
+    """{surface: (root or None, sessions not made by this skill)}; self-runs noted."""
+    found = {}
     for name in ("code", "cowork"):
         root, sessions = scan_code(since, notes) if name == "code" else scan_cowork(since, notes, email)
+        mine = [s for s in sessions if not s["is_self"]]
+        if len(sessions) != len(mine):
+            notes.append("%s: set aside %d of this skill's own runs" % (name, len(sessions) - len(mine)))
+        found[name] = (root, mine)
+    return found
+
+
+def cmd_scan(args):
+    now = dt.datetime.now(dt.timezone.utc)
+    cfg = load_config()
+    email = known_email(cfg)
+    previous = last_run()
+    notes, surfaces, digests, skims = [], {}, [], []
+    basis, since_checkin, found, since = "fresh", None, None, None
+    if args.since_last:
+        cut = parse_ts((previous or {}).get("covered_to"))
+        if cut and cut < now:
+            basis, since, since_checkin = "since-last", cut, cut.date().isoformat()
+            found = gather(since, email, notes)
+        else:
+            notes.append("no earlier check-in on record, so this is a fresh check-in")
+    if found is None:  # fresh: widen the window until there are enough sessions to read
+        windows = (args.days,) if args.days else WIDEN_DAYS
+        for days in windows:
+            notes_now = []
+            since = now - dt.timedelta(days=days)
+            found = gather(since, email, notes_now)
+            if sum(len(driven(ss)) for _, ss in found.values()) >= args.max_per_surface:
+                break
+        notes.extend(notes_now)
+    days = max(1, -(-int((now - since).total_seconds()) // 86400))
+    for name, (root, mine) in found.items():
         if root is None:
             surfaces[name] = {"found": False}
             continue
-        mine = [s for s in sessions if not s["is_self"]]
         active = [s for s in mine if s["turns"] or s["signals"]["tools"]]
         picked = sample(active, args.max_per_surface)
-        surfaces[name] = {"found": True, "aggregate": aggregate(active), "sampled": len(picked)}
+        surfaces[name] = {"found": True, "aggregate": aggregate(active), "sampled": len(picked),
+                          "carried_over": sum(1 for s in picked if s["earlier"])}
         digests.extend(shape(s, i) for i, s in enumerate(picked, 1))
         rest = sorted((s for s in active if s not in picked and not s["automated"]),
                       key=lambda s: s["start"] or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
@@ -1193,15 +1379,14 @@ def cmd_scan(args):
                                                     ("subagents", s["signals"]["subagents"]),
                                                     ("ship", sum(s["signals"]["ship"].values()))) if v}}
                      for s in rest[-SKIM_MAX:])
-        if len(sessions) != len(mine):
-            notes.append("%s: set aside %d of this skill's own runs" % (name, len(sessions) - len(mine)))
     stage = {"stage": None, "source": "not checked (--no-tracker)"} if args.no_tracker else tracker_stage(cfg)
     result = {
         "generated": now.isoformat(),
-        "window": {"from": since.isoformat(), "to": now.isoformat(), "days": args.days},
+        "window": {"from": since.isoformat(), "to": now.isoformat(), "days": days,
+                   "basis": basis, "since_checkin": since_checkin},
         "stage_on_record": stage,
         "settings": {k: cfg.get(k) for k in ("frequency", "tracker_lookup") if k in cfg},
-        "previous_run": last_run(),
+        "previous_run": previous,
         "surfaces": surfaces,
         "chat": {"found": False, "note": "claude.ai chats are not on this computer; run the skill inside claude.ai to include them"},
         "sessions": digests,
@@ -1211,8 +1396,9 @@ def cmd_scan(args):
     write_private(digest_path(), json.dumps(result, indent=1, default=str))
     seen = ", ".join("%s %d sessions" % (k, v["aggregate"]["sessions"]) for k, v in surfaces.items() if v.get("found"))
     print("digest: %s" % digest_path())
-    print("window: last %d days | %s | sampled %d | stage on record: %s (%s)" % (
-        args.days, seen or "no sessions found", len(digests), stage["stage"], stage["source"]))
+    print("window: %s | %s | read closely %d | stage on record: %s (%s)" % (
+        "since the check-in on %s" % since_checkin if basis == "since-last" else "last %d days" % days,
+        seen or "no sessions found", len(digests), stage["stage"], stage["source"]))
     for n in notes:
         print("note: %s" % n)
 
@@ -1243,8 +1429,9 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="digest.py")
     sub = p.add_subparsers(dest="cmd")
     s = sub.add_parser("scan")
-    s.add_argument("--days", type=int, default=7)
-    s.add_argument("--max-per-surface", type=int, default=20)
+    s.add_argument("--days", type=int, default=None, help="fix the window instead of widening it")
+    s.add_argument("--since-last", action="store_true", help="only what is new since the last check-in")
+    s.add_argument("--max-per-surface", type=int, default=SAMPLE_SIZE)
     s.add_argument("--no-tracker", action="store_true")
     r = sub.add_parser("render")
     r.add_argument("file")

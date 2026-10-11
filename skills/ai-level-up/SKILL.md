@@ -76,7 +76,7 @@ Where the skill runs decides what it can see. claude.ai chat search can't reach 
 
 ## Step 0 — Which kind of run is this?
 
-- **Scheduled run**: the prompt starts "Scheduled check-in". Ask nothing. If fewer than 3 sessions the person actually drove were seen, reply "Quiet week, nothing worth a report" and stop.
+- **Scheduled run**: the prompt starts "Scheduled check-in". Ask nothing. Read only what's new since the last check-in (Step 1). If fewer than 3 sessions the person actually drove were seen, reply "Quiet week, nothing worth a report" and stop.
 - **Settings request** ("stop my AI check-ins", "check in monthly", "my work email is …"): go to Step 5 and do only that.
 - **Otherwise**: a normal run.
 
@@ -99,12 +99,11 @@ for c in python3 python py; do p=$(command -v "$c" 2>/dev/null) || continue
 ```
 
 - **No Python printed:** stop. Say: "I can't read your sessions on this computer yet. Ask me inside claude.ai instead, where I can look at your chats." Never fall back to reading raw files.
-- **Otherwise run:** `"<python>" "<skill-dir>/scripts/digest.py" scan --days <N>`
-  - **N (days to look back):**
-    - Scheduled runs: 7 for weekly, 30 for monthly.
-    - First run: 14.
-    - Otherwise: days since the last run, between 7 and 30.
-  - **What to read:** the JSON file it names. It holds `stage_on_record`, `previous_run`, per-surface `aggregate` stats over *all* sessions, up to 20 `sessions` per surface to read closely (the person's own turns, plus what Claude did in each), one-line `skimmed` summaries of the rest (use them for the overall picture, never for quotes or fit verdicts), and `notes`.
+- **Otherwise run one of these:**
+  - **Fresh check-in** (the default, and any time someone asks): `"<python>" "<skill-dir>/scripts/digest.py" scan`. It looks back 7 days and widens to 14, then 30, until it has 30 sessions to read closely.
+  - **Scheduled check-in:** add `--since-last`. It reads only what's new since the last check-in: new sessions first, then the new turns in older sessions (marked `continued`), up to 30. With no earlier check-in on record it does a fresh one.
+  - Either way the report is a full report, never a list of changes.
+- **What to read:** the JSON file it names. It holds `window` (days, `basis`, `since_checkin`), `stage_on_record`, `previous_run`, per-surface `aggregate` stats over *all* sessions, up to 30 `sessions` per surface to read closely (the person's own turns, plus what Claude did in each), one-line `skimmed` summaries of the rest (use them for the overall picture, never for quotes or fit verdicts), and `notes`.
 - **Several Claude accounts:** if a note says Cowork was skipped for this reason, ask once for their work email, save it with `config email=…`, and scan again.
 - **Machine-made sessions:** drop any sampled session that is plainly machine-made (health checks, canned repeated prompts, test canaries).
 
@@ -137,6 +136,7 @@ For each sampled session or chat, note:
   - `lower`: they handed over too much for the stakes.
   - For `higher` or `lower`, also give `better_level`. Add `why` in one plain sentence.
 - **Checked:** `true` if they did the check their level calls for (from `levels.md`). That can come before the work (said what done looks like, reviewed the plan) or after it (looked at the result). It also counts if the work clearly goes back to them for review before anyone uses it.
+- **Risks they accepted are their call.** If the person knowingly accepted a risk ("I accept the risk", "leave it, I know"), don't judge the session `lower` for it, and never raise it again as a gap, an experiment or a "since last time" line.
 - **Behaviours:** which of the 11 showed, and which diligence signals.
 
 Then roll up:
@@ -149,12 +149,15 @@ Then roll up:
 
 **Experiments (up to 3).** Each one:
 
-- **Replays a real task:** "Next time you do X…".
+- **Replays a real task:** "Next time you do X…", and names that session in `from`. Pick the one with the most friction: the most corrections, interruptions, restarts or unclear asks.
 - **Gives a copy-paste prompt** for the person's surface.
+- **Comes with a worked example from their own work.** A template (a prompt with blanks such as `<goal>`, a checklist, a done-when list) is not an example. Fill it in once, completely, for the session in `from`, and put that in `example`. The page refuses a template that has no example.
 - **Names the check they owe** (from `levels.md`).
 - **Says why**, tied to the sign that triggered it.
 
 Mix the directions as the evidence says: up, same plus a check, down, or `habit` (grow a habit that sits behind typical). A first-timer gets the simplest one first. Titles say what to do. Never repeat the direction in the title.
+
+**Habit notes.** For each habit that sits 10 or more points below typical, write one line in `habit_notes` on where it would have helped in a named session ("7 Oct · Trina agenda: pasting last month's agenda as the model would have kept your layout"). The page shows it when they click that habit.
 
 **One fix to make stick (optional).**
 
@@ -173,6 +176,7 @@ Write the findings as JSON in the private state folder (local mode: `~/.ai-level
 ```json
 {
   "date": "YYYY-MM-DD", "window_days": 7, "mode": "local | chat | project",
+  "basis": "fresh | since-last (copy window.basis)", "since_date": "copy window.since_checkin, or leave out",
   "seen": "Claude Code (74 sessions, 8 read closely) · Cowork: none this week · Not seen: claude.ai chats (ask me there)",
   "seen_counts": {"code": 74, "cowork": 0, "chat": 0},
   "stage": "Maker or null", "unlock": "Kevin's wording; for Steward: 'Next: make what you built runnable by others, and take on more.'", "toward_unlock": "one real task + the one action",
@@ -182,28 +186,31 @@ Write the findings as JSON in the private state folder (local mode: `~/.ai-level
                 "points": [{"label": "Right level:", "text": "…", "quote": "their own words", "ref": "24 Sep"}]}],
   "strengths": [{"text": "…", "quote": "…", "ref": "…"}],
   "edges": [{"text": "…", "quote": "…", "ref": "…"}],
-  "experiments": [{"title": "what to do, not the direction", "direction": "up | same+check | down | habit", "why": "…", "prompt": "…", "check": "…"}],
+  "experiments": [{"title": "what to do, not the direction", "direction": "up | same+check | down | habit", "why": "…",
+                   "from": "7 Oct · short title of the real session", "prompt": "…",
+                   "example": "the prompt filled in for that session (required when the prompt has blanks)", "check": "…"}],
   "fix": {"summary": "one line for the closed heading", "pattern": "what keeps happening (and 'it's there but not sticking' if so)", "line": "…", "where": "the place only, e.g. Claude's instructions file (CLAUDE.md)"},
   "tasks": [{"session": "24 Sep · short title", "task": "…", "level": "Agent", "fit": "right | higher | lower",
              "better_level": "only when fit isn't right", "why": "one plain sentence", "checked": true,
              "check_note": "only when checked is false: what wasn't checked, in a few words"}],
   "behaviours": {"1": "7 of 8", "11": "4 of 8"},
+  "habit_notes": {"2": "7 Oct · Trina agenda: one line on where this habit would have helped"},
   "levels": {"Claude Code": "mostly Workflows; Agent for policy work"},
-  "paradox": "…", "method": "what was read and how much", "schedule_line": "…", "frequency": "weekly"
+  "schedule_line": "…", "frequency": "weekly"
 }
 ```
 
 - **What the page draws from these:**
   - `stage` is a five-stop track.
-  - `tasks` become a ladder of the eight levels. Each session is a numbered mark linked to its `why`; a dashed mark shows its `better_level`.
-  - `behaviours` become you-vs-typical bars, with a tick for last time's value when `previous` has one.
+  - `tasks` become one bar per level, coloured by fit. Clicking a bar's count opens its sessions with their `why`.
+  - `behaviours` become you-vs-typical bars, grouped into ahead, to improve and about typical. Clicking a habit opens what it means, an example, and its `habit_notes` line.
   - Three score tiles, each compared with last time:
     - Ways of working: sessions at the right level.
     - Checking the work: sessions where the check was done.
     - Habits: habits ahead of typical.
 - **Tasks:** give each one exactly one level name from `levels.md` (the level it reached) and a `fit`.
 - **Behaviours:** numbered 1–11 in the order of `fluency.md`. Use `{}` when fewer than 8 sessions or chats were seen; the page will say "too few to compare".
-- **Render it:** `"<python>" "<skill-dir>/scripts/digest.py" render ~/.ai-level-up/report-draft.json --open`. The script escapes and masks every value, cuts quotes to 15 words, saves the page privately, opens it, and records a quote-free history line.
+- **Render it:** `"<python>" "<skill-dir>/scripts/digest.py" render ~/.ai-level-up/report-draft.json --open`. The script escapes and masks every value, cuts quotes to 15 words, saves the page privately, opens it, and records a quote-free history line. If it prints "fix needed", fix each line in the JSON and render again.
 - **Chat mode:**
   - If you can run code, render the same way with `--no-record` and show the page.
   - Otherwise, write the same sections as a plain message.
@@ -237,7 +244,7 @@ After the report, ask once: "How often should I check in: weekly (recommended), 
 - **Desktop app**, if you have a create-scheduled-task tool:
   - Create task `ai-level-up-checkin`.
   - Weekly: `0 15 * * 5` (Fridays 3pm). Monthly: `0 15 1 * *`.
-  - Prompt: "Scheduled check-in: run the ai-level-up skill for the last <7|30> days. Ask no questions; write the report and open it."
+  - Prompt: "Scheduled check-in: run the ai-level-up skill on everything new since the last check-in. Ask no questions; write the report and open it."
   - Tell the person it runs while the app is open, and catches up at the next launch otherwise.
 - **Cowork**, if it lets you schedule a task: do the same, and say it runs next time the app is open after Friday 3pm.
 - **Otherwise** (terminal-only, or claude.ai on the web): "I can't set a reminder from here. Ask me 'how am I doing with AI?' any Friday."
@@ -251,6 +258,7 @@ After the report, ask once: "How often should I check in: weekly (recommended), 
 |---|---|
 | "Stop my AI check-ins" | Delete the scheduled task, then `config frequency=never` |
 | "Check in monthly" (or weekly) | Update the task's schedule, then `config frequency=<choice>` |
+| "Do a fresh check-in" | A normal run: plain `scan`, up to 30 recent sessions |
 | "Walk me through #N" | Teach that experiment in plain words on one of their real tasks: what to do first, a sample (a done-when list, a prompt, an acceptance table), and how they'll know it worked. No jargon. |
 | "My work email is …" | `config email=<email>`. It's used only to read their own stage, and to tell their own Cowork account apart from others on the computer |
 

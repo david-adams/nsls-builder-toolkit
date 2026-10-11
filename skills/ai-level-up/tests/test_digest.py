@@ -1,4 +1,4 @@
-"""Tests for scripts/digest.py on synthetic data. Run from this skill folder: python3 -m unittest discover tests"""
+"""Tests for skill/scripts/digest.py on synthetic data. Run from skills/ai-level-up/: python3 -m unittest discover tests"""
 import datetime as dt
 import io
 import json
@@ -303,13 +303,14 @@ class Render(Home):
                            "points": [{"label": "Right level:", "text": "ok",
                                        "quote": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen",
                                        "ref": "3 Oct"}]}],
-             "experiments": [{"title": "Try <b>this</b>", "why": "w", "prompt": "Use key sk-ant-abcdefghijklmnopqrstuvwxyz", "check": "c"}],
+             "experiments": [{"title": "Try <b>this</b>", "why": "w", "prompt": "Use key sk-ant-abcdefghijklmnopqrstuvwxyz", "check": "c",
+                              "from": "3 Oct · sheet clean-up"}],
              "behaviours": {"1": "3 of 3"}, "seen_counts": {"code": 3}, "frequency": "weekly"}
         r.update(kw)
         path = os.path.join(self.home, "r.json")
         with open(path, "w") as fh:
             json.dump(r, fh)
-        quiet(digest.main, ["render", path])
+        quiet(digest.main, ["render", path] + (["--no-record"] if os.path.exists(digest.history_path()) else []))
         with open(os.path.join(digest.reports_dir(), "2026-10-03.html")) as fh:
             return fh.read()
 
@@ -337,22 +338,26 @@ class Render(Home):
                           behaviours={"1": "7 of 8", "2": "1 of 8", "3": "9 of 8"},
                           previous={"behaviours": {"1": "5/8"}, "stage": "Explorer", "scores": {"right_level": "0/3"}})
         main = out.split("<main", 1)[1]
-        self.assertIn('<a href="#level-3">2 sessions</a>', main)  # count links to the sessions behind the bar
-        self.assertIn('id="level-3"', main)
+        self.assertIn('<span class="lv-count">2 sessions</span>', main)  # the count opens the sessions behind the bar
+        self.assertEqual(main.count('<details class="lv-row">'), 2)        # one per level with sessions; empty levels don't open
+        self.assertNotIn("sessions behind each bar", main)
         self.assertIn('class="seg higher"', main)                 # bar coloured by fit
         self.assertIn("(better: Workflows)", main)
         self.assertIn('class="fit lower"', main)                  # old 'too trusting' verdicts still map
         self.assertNotIn("#s1", main)                             # sessions are never numbered
-        self.assertIn("level 3 (Agent) to level 4 (Autopilot)", main)
-        self.assertIn("Mostly level 3 (Agent).", main)            # a missed hand-over is not "beginnings"
+        self.assertIn("<strong>Range: level 3 (Agent) to level 4 (Autopilot)</strong>", main)
+        self.assertIn("<li>Mostly level 3 (Agent).</li>", main)   # a missed hand-over is not "beginnings"
+        self.assertNotIn("Your range", main)
+        self.assertIn("<strong>Higher isn't better.</strong>", main)
         self.assertIn("Checked the work: no", main)
 
         self.assertIn("1<small> of 3</small>", main)              # right level: 1 of the 3 judged
         self.assertIn("1<small> of 2</small>", main)              # checks: 1 of the 2 with a check recorded
         self.assertIn("▲ from 0 of 3 last time", main)
         self.assertIn("width:87.5%", main)                        # 7 of 8
-        self.assertIn("▼ −29", main)                              # 1 of 8 vs typical 41.1
-        self.assertIn('class="prev" style="left:62.5%"', main)    # last check-in tick
+        self.assertIn("typical 41%", main)                        # typical sits under your bar, not beside it
+        self.assertIn("You: 7 of 8 sessions (last time 5 of 8)", main)  # the count shows on hover
+        self.assertNotIn("▼ −", main)                             # no plus/minus column
         self.assertNotIn("9 of 8", main)                          # impossible ratios are dropped
         self.assertIn("Up a stage since last time", main)
         self.assertNotIn("sessions looked at", main)              # the tiles are scores only
@@ -378,11 +383,62 @@ class Render(Home):
         main = self.report(behaviours={}, tasks=[{"level": "Agent", "fit": "right", "checked": True}]).split("<main", 1)[1]
         self.assertIn("needs 8 or more sessions read closely", main)
 
-    def test_beginnings_come_from_next_level_work_done_well(self):
+    def test_verdict_names_ties_and_next_level_work_done_well(self):
         tasks = [{"level": "Agent", "fit": "right"}] * 3 + [{"level": "Workflows", "fit": "right"}]
-        self.assertIn("Mostly level 3 (Agent), with the beginnings of level 5 (Workflows)", self.report(tasks=tasks))
-        tied = [{"level": "Agent", "fit": "right"}, {"level": "Multi-agent", "fit": "right"}]
-        self.assertIn("Mostly level 3 (Agent), with the beginnings of level 7", self.report(tasks=tied))  # ties resolve downward
+        self.assertIn("Mostly level 3 (Agent), with the beginnings of level 5 (Workflows).", self.report(tasks=tasks))
+        tied = [{"level": "Agent", "fit": "right"}] * 3 + [{"level": "Workflows", "fit": "right"}] + [{"level": "Multi-agent", "fit": "right"}] * 3
+        out = self.report(tasks=tied)
+        self.assertIn("Mostly levels 3 (Agent) and 7 (Multi-agent).", out)  # a tie names both
+        self.assertNotIn("beginnings", out)
+        spread = [{"level": n, "fit": "right"} for n in ("Agent", "Autopilot", "Workflows")]
+        self.assertIn("Spread evenly across 3 levels.", self.report(tasks=spread))
+        self.assertIn("All at level 3 (Agent)", self.report(tasks=[{"level": "Agent", "fit": "right"}] * 2))
+
+    def test_habits_are_grouped_and_explained(self):
+        beh = {"1": "9 of 9", "2": "1 of 9", "3": "2 of 9", "5": "0 of 9", "9": "6 of 9"}
+        main = self.report(behaviours=beh, habit_notes={"2": "Paste last month's agenda as the model."}).split("<main", 1)[1]
+        for word in ("Description", "Delegation", "Discernment"):
+            self.assertNotIn(word, main)
+        ahead, grow, par = (main.index(h) for h in ("Ahead of typical", "Habits to improve", "About typical"))
+        self.assertLess(ahead, grow)
+        self.assertLess(grow, par)
+        self.assertLess(main.index("Shows an example of good"), main.index("Gives tone and style"))  # biggest gap first
+        self.assertEqual(main.count("Big gap</span>"), 2)          # 30 and 23 points below typical; 8 isn't big
+        self.assertIn('popovertarget="habit-2"', main)               # click a habit for what it means
+        self.assertIn('id="habit-2" popover', main)
+        self.assertIn("match this tone and length", main)
+        self.assertIn("Paste last month&#x27;s agenda as the model.", main)
+        self.assertIn('id="habits"', main)
+        self.assertIn('See the 3 you could improve', main)           # 2 ahead of 5, so 3 to work on
+
+    def test_template_prompts_need_an_example_from_a_real_session(self):
+        exp = {"title": "Open each session with a job card", "direction": "habit", "why": "w", "check": "c",
+               "prompt": "Job: <one outcome>. Done when: <check>."}
+        with self.assertRaises(SystemExit) as stop:
+            self.report(experiments=[exp])
+        self.assertIn("add \"from\"", str(stop.exception))
+        self.assertIn("is a template", str(stop.exception))
+        with self.assertRaises(SystemExit) as stop:
+            self.report(experiments=[dict(exp, **{"from": "7 Oct · agenda", "example": "Job: <still blank>."})])
+        self.assertIn("still has blanks", str(stop.exception))
+        out = self.report(experiments=[dict(exp, **{"from": "7 Oct · agenda", "example": "Job: Trina's agenda. Done when: she approves it."})])
+        self.assertIn("Template: fill in the blanks", out)
+        self.assertIn("Filled in for 7 Oct · agenda", out)
+        self.assertIn("From your week: <strong>7 Oct · agenda</strong>", out)
+
+    def test_about_says_where_to_run_and_footer_says_who_to_ask(self):
+        out = self.report(paradox="Mixed. Checking held up.", method="68 counted; 9 judged.").split("<main", 1)[1]
+        about = out[out.index("About this check-in"):out.index("<footer")]
+        self.assertIn("Where to run it.", about)
+        self.assertIn("Fresh or since last time.", about)
+        self.assertNotIn("Checking held up", out)                  # old free-text notes are gone
+        self.assertNotIn("9 judged", out)
+        self.assertIn("Send them to Davo Wood", out[out.index("<footer"):])
+
+    def test_since_last_scope_line(self):
+        out = self.report(basis="since-last", since_date="2026-10-09", tasks=[{"level": "Agent", "fit": "right"}] * 2)
+        self.assertIn("everything new since your last check-in on 9 Oct", out)
+        self.assertIn("since 9 Oct", out)
 
     def test_experiments_offer_a_walk_through(self):
         out = self.report()
@@ -393,6 +449,51 @@ class Render(Home):
         out = self.report(stage="Wizard")
         self.assertNotIn("Wizard", out)
         self.assertIn("couldn", out)
+
+
+class ScanModes(Home):
+    def run_scan(self, *extra):
+        quiet(digest.main, ["scan", "--no-tracker"] + list(extra))
+        with open(digest.digest_path()) as fh:
+            return json.load(fh)
+
+    def test_fresh_scan_widens_until_it_has_enough_sessions(self):
+        self.code_session("recent", [user("a", ts=iso(2)), user("b", ts=iso(2)), user("c", ts=iso(2))])
+        self.code_session("older", [user("d", ts=iso(10)), user("e", ts=iso(10)), user("f", ts=iso(10))])
+        d = self.run_scan("--max-per-surface", "2")
+        self.assertEqual(d["window"]["days"], 14)
+        self.assertEqual(d["window"]["basis"], "fresh")
+        self.assertEqual(len(d["sessions"]), 2)
+        self.assertEqual(self.run_scan("--max-per-surface", "2", "--days", "7")["window"]["days"], 7)  # a fixed window stays fixed
+
+    def test_since_last_reads_new_sessions_first_then_new_turns_in_old_ones(self):
+        os.makedirs(digest.state_dir(), exist_ok=True)
+        digest.write_private(digest.history_path(), json.dumps({"date": "2026-10-09", "covered_to": iso(3)}) + "\n")
+        self.code_session("old", [user("before %d" % i, ts=iso(5)) for i in range(6)] + [user("after", ts=iso(1))])
+        self.code_session("new", [user("fresh %d" % i, ts=iso(1)) for i in range(3)])
+        d = self.run_scan("--since-last", "--max-per-surface", "1")
+        self.assertEqual(d["window"]["basis"], "since-last")
+        self.assertEqual([s["title"] for s in d["sessions"]], ["fresh 0"])  # new session wins the only place
+        d = self.run_scan("--since-last")
+        old = [s for s in d["sessions"] if s["continued"]][0]
+        self.assertEqual([t["text"] for t in old["turns"]], ["after"])    # only the new part of an old session
+        self.assertEqual(d["surfaces"]["code"]["carried_over"], 1)
+
+    def test_since_last_without_a_record_is_a_fresh_check_in(self):
+        self.code_session("s", [user("a"), user("b"), user("c")])
+        d = self.run_scan("--since-last")
+        self.assertEqual(d["window"]["basis"], "fresh")
+        self.assertTrue(any("fresh check-in" in n for n in d["notes"]))
+
+    def test_render_records_where_the_reading_stopped(self):
+        self.code_session("s", [user("a"), user("b"), user("c")])
+        d = self.run_scan()
+        path = os.path.join(self.home, "r.json")
+        with open(path, "w") as fh:
+            json.dump({"date": "2026-10-11", "tasks": []}, fh)
+        quiet(digest.main, ["render", path])
+        with open(digest.history_path()) as fh:
+            self.assertEqual(digest.parse_ts(json.loads(fh.readline())["covered_to"]), digest.parse_ts(d["window"]["to"]))
 
 
 if __name__ == "__main__":
