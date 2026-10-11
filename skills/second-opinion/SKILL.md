@@ -69,12 +69,12 @@ everyday work, and reviewer.
 - **Block found:** follow it. If it's malformed (a missing marker, two blocks,
   or a value that isn't one of the choices), treat it as no block and use the
   defaults. Repair it only when they ask to change their settings.
-- **No block, and the person is an early tester** (see Early testers): before
-  the first second opinion you would run or offer, show the settings window
-  (see Settings) and save their answers. Then carry on with what they chose.
-- **No block otherwise:** use the defaults. Risky work is *offered* (ask me),
-  everyday work is offered, and the reviewer is Balanced. Never run anything
-  automatically without their say-so.
+- **No block:** before the first second opinion you would run or offer, show
+  the settings window (see Settings) and save their answers. Then carry on with
+  what they chose. If they close it without answering, use the defaults for
+  this session: risky work is *offered* (ask me), everyday work is offered, and
+  the reviewer is Balanced. Never run anything automatically without their
+  say-so.
 - **They ask to set up or change their settings** (anyone, any time): show the
   settings window.
 
@@ -278,15 +278,16 @@ example `- Reviewer: balanced`. Answers map to values like this:
 
 ## Early testers
 
-The automatic settings window (Step 0) and the receipt line (Step 7) are on
-only for these people while the feature is tested:
+The receipt line (Step 7) is on only for these people while the feature is
+tested. The settings window is on for everyone.
 
 - davowood@nsls.org
 
 Check the email of the signed-in account that Claude Code gives you for this
 session. If you can't see one, treat the person as not an early tester.
-Everyone else still gets everything else: offers on risky and everyday work,
-second opinions when they ask, and the settings window when they ask for it.
+Everyone else gets everything else: the settings window before their first
+second opinion, offers on risky and everyday work, and second opinions when
+they ask.
 
 ## Red flags — STOP
 
