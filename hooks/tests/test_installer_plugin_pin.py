@@ -172,6 +172,19 @@ check("it installs the toolkit from the pinned source",
 check("it starts an installed plugin over when it can't be what was asked for",
       "plugin marketplace remove nsls-toolkit" in ps1 and "$Repoint = $Testing -or [bool]$src.ref" in ps1)
 check("it prints the plugin's commit", "Plugin commit:" in ps1)
+check("a wrong-commit plugin counts as a failed install",
+      "$InstallFailed += 'nsls-builder-toolkit (not the branch asked for)'" in ps1)
+check("a toolkit plugin that didn't install counts as a failed install",
+      "$ToolkitMarket)) { $InstallFailed += 'nsls-builder-toolkit' }" in ps1)
+check("a failed install changes the banner and exits 1",
+      "if ($InstallFailed.Count) { Write-Host" in ps1
+      and "if ($InstallFailed.Count) { exit 1 } else { exit 0 }" in ps1)
+
+print("install.sh never calls a failed install a success")
+sh = (REPO / "install.sh").read_text(encoding="utf-8")
+check("the banner names what did not install",
+      'if [ -n "$INSTALL_FAILED" ]; then\n  echo "  NSLS Builder Toolkit set up, but this did NOT install' in sh)
+check("and the installer exits 1", sh.rstrip().endswith('[ -z "$INSTALL_FAILED" ] || exit 1'))
 
 if failures:
     print(f"\n{len(failures)} FAILED")

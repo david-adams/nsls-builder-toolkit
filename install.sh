@@ -1207,7 +1207,9 @@ fi
 
 echo ""
 echo "==============================="
-if [ "$UPDATE_FAILED" = 1 ]; then
+if [ -n "$INSTALL_FAILED" ]; then
+  echo "  NSLS Builder Toolkit set up, but this did NOT install: $INSTALL_FAILED (see [!] above)."
+elif [ "$UPDATE_FAILED" = 1 ]; then
   echo "  NSLS Builder Toolkit set up, but NOT updated (see the WARNING above)."
 else
   echo "  NSLS Builder Toolkit installed!"
@@ -1283,3 +1285,7 @@ else
   echo "     productivity skills (daily planning, weekly reviews, project logging)."
   echo ""
 fi
+
+# A known failure exits 1, so a wrapper or CI can tell (the banner above already
+# says what is missing).
+[ -z "$INSTALL_FAILED" ] || exit 1
