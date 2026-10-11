@@ -1,0 +1,59 @@
+name: hook-tests
+
+# The hooks and installers have a test suite (hooks/tests) that until now ran
+# only when someone remembered to run it locally. Run all of it on every PR that
+# touches what it covers, on Mac and Linux. Windows has its own job in
+# windows-hooks.yml.
+on:
+  pull_request:
+    paths:
+      - 'hooks/**'
+      - 'install.sh'
+      - 'install.ps1'
+      - '_shared/scripts/**'
+      - '.github/workflows/hook-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'hooks/**'
+      - 'install.sh'
+      - 'install.ps1'
+      - '_shared/scripts/**'
+      - '.github/workflows/hook-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  hook-tests:
+    name: hooks/tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet pytest
+      - name: Run every test file; report all failures, not just the first
+        shell: bash
+        run: |
+          git config --global user.email ci@example.invalid
+          git config --global user.name ci
+          failed=()
+          for t in hooks/tests/test_*.py; do
+            echo "::group::$t"
+            # Most files are plain scripts; the few written for pytest say so.
+            if grep -q '^import pytest' "$t"; then python -m pytest -q "$t"; else python "$t"; fi \
+              || failed+=("$t")
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            printf 'FAILED: %s\n' "${failed[@]}"
+            exit 1
+          fi
+          echo "all test files passed"
