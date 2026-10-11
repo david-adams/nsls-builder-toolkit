@@ -747,8 +747,54 @@ if ($ClaudeBin) {
     # registers this machine's hooks, and the settings.json entries below
     # become the transitional copy that stage B retires once per-hook beacons
     # prove the plugin's own hooks fire here.
+    # The plugin must come from the same branch as the clone in Step 1. Without a
+    # pin, 'marketplace add' takes the repo's default branch, so testing a branch
+    # ran the branch's hooks (the clone) with main's skills (the plugin). A local
+    # folder can't carry a pin: Claude Code reads it as it is on disk.
+    $ToolkitMarket = $RepoUrl
+    if ($RepoBranch -ne 'main' -and $RepoUrl -match '^(https?://|ssh://|git@)') {
+        $ToolkitMarket = "$RepoUrl#$RepoBranch"
+    }
+    # Install-Plugin skips a plugin that is already installed, so on a machine
+    # that has the toolkit the pin never took effect. Start the plugin over when
+    # it can't be what was asked for: on every run that names a branch or a repo
+    # (a branch moves without a version bump, which 'plugin update' ignores), and
+    # on a plain run that finds a test branch or another repo still registered.
+    # The normal case, production and unpinned, is left alone.
+    $Testing = [bool]("$env:NSLS_TOOLKIT_BRANCH$env:NSLS_TOOLKIT_REPO")
+    $Registry = Join-Path $ConfigDir 'plugins\known_marketplaces.json'
+    $Repoint = $false
+    if (Test-Path $Registry) {
+        try {
+            $src = (Get-Content $Registry -Raw -Encoding UTF8 | ConvertFrom-Json).'nsls-toolkit'.source
+            if ($src) {
+                $url = if ($src.url) { $src.url } elseif ($src.path) { $src.path } elseif ($src.repo) { "https://github.com/$($src.repo)" } else { '' }
+                $norm = { param($u) $u = "$u".Trim().TrimEnd('/').ToLowerInvariant(); if ($u.EndsWith('.git')) { $u.Substring(0, $u.Length - 4) } else { $u } }
+                $Repoint = $Testing -or [bool]$src.ref -or ((& $norm $url) -ne (& $norm $RepoUrl))
+            }
+        } catch { }  # unreadable registry: leave it, as before
+    }
+    if ($Repoint) {
+        Write-Host "  Pointing the toolkit plugin at $RepoBranch..."
+        & $ClaudeBin plugin marketplace remove nsls-toolkit 2>$null | Out-Null
+    }
     Install-Plugin 'nsls-builder-toolkit' 'nsls-builder-toolkit@nsls-toolkit' `
-        $RepoUrl
+        $ToolkitMarket
+    # The plugin's half of the receipt. On a test run, a plugin that isn't the
+    # commit the clone is on is the failure the pin above exists to prevent.
+    try {
+        $entry = (Get-Content (Join-Path $ConfigDir 'plugins\installed_plugins.json') -Raw -Encoding UTF8 |
+            ConvertFrom-Json).plugins.'nsls-builder-toolkit@nsls-toolkit' | Where-Object { $_.gitCommitSha } | Select-Object -First 1
+        if ($entry) {
+            $sha = "$($entry.gitCommitSha)"
+            Write-Host "  Plugin commit: $($sha.Substring(0, [Math]::Min(7, $sha.Length)))"
+            $clone = "$(Invoke-Native 'git' @('-C', $PluginDir, 'rev-parse', 'HEAD'))".Trim()
+            if ($env:NSLS_TOOLKIT_BRANCH -and $clone -match '^[0-9a-f]{40}$' -and $clone -ne $sha) {
+                Write-Host "  [!] The plugin is not the commit you asked for ($($clone.Substring(0, 7)))."
+                Write-Host "      Re-run this installer; if it happens again, the branch moved mid-install."
+            }
+        }
+    } catch { }  # no registry yet: nothing to report
 
     Install-Plugin 'superpowers' 'superpowers@superpowers-marketplace' `
         'https://github.com/obra/superpowers-marketplace.git'
