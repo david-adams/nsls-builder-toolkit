@@ -212,6 +212,15 @@ class Signals(Home):
         self.assertEqual([s["title"] for s in d["sessions"]], ["let's improve the ai-level-up skill"])
         self.assertTrue(any("own runs" in n for n in d["notes"]))
 
+    def test_desktop_scheduled_runs_are_automated_and_check_ins_are_self(self):
+        wrap = '<scheduled-task name="%s" file="/x/SKILL.md"> This is an automated run of a scheduled task. %s</scheduled-task>'
+        self.code_session("health", [user(wrap % ("git-health-check", "Scan every repo.")), user("b"), user("c")])
+        self.code_session("checkin", [user(wrap % ("weekly", digest.SCHEDULED_PREFIX + " on everything new.")), user("b"), user("c")])
+        d = self.scan()
+        self.assertEqual(d["sessions"], [])
+        self.assertEqual(d["surfaces"]["code"]["aggregate"]["automated_sessions"], 1)
+        self.assertTrue(any("own runs" in n for n in d["notes"]))
+
     def test_headless_runs_are_automated_and_not_sampled(self):
         self.code_session("cron", [dict(user("nightly job"), entrypoint="sdk-cli"), user("b"), user("c")])
         d = self.scan()

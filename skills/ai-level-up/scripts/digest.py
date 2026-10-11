@@ -463,8 +463,12 @@ def ingest_line(s, o, since):
         if is_self_command(clean):
             s["is_self"] = True
         s["commands"].append(clip(mask(clean, s["secret_flags"]), 120))
-    elif not s["turns"] and clean.startswith(SCHEDULED_PREFIX):
-        s["is_self"] = True
+    elif not s["turns"]:
+        head = clean[:4000]
+        if head.startswith(SCHEDULED_PREFIX) or (head.startswith("<scheduled-task") and SCHEDULED_PREFIX in head):
+            s["is_self"] = True  # a scheduled check-in, wrapped or not
+        elif head.startswith("<scheduled-task"):  # the desktop app wraps every scheduled run in this tag
+            s["automated"], s["automation_reason"] = True, "scheduled task"
     own, removed = strip_blocks(clean, "<pasted_content", "</pasted_content")
     turn = {"t": ts.isoformat(), "kind": kind, "text": clip(mask(own, s["secret_flags"]))}
     if removed:
