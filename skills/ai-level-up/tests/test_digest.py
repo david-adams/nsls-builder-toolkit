@@ -456,6 +456,11 @@ class Render(Home):
         self.assertNotIn("9 judged", out)
         self.assertIn("Send them to Davo Wood", out[out.index("<footer"):])
 
+    def test_background_runs_are_named_under_the_chart(self):
+        out = self.report(tasks=[{"level": "Agent", "fit": "right"}] * 2, scheduled_runs=74)
+        self.assertIn("Not in the bars: 74 scheduled runs that worked without you", out)
+        self.assertNotIn("Not in the bars", self.report(tasks=[{"level": "Agent", "fit": "right"}], scheduled_runs="74"))
+
     def test_since_last_scope_line(self):
         out = self.report(basis="since-last", since_date="2026-10-09", tasks=[{"level": "Agent", "fit": "right"}] * 2)
         self.assertIn("everything new since your last check-in on 9 Oct", out)

@@ -1012,7 +1012,7 @@ def and_join(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def levels_section(tasks, scores):
+def levels_section(tasks, scores, background=0):
     """One bar per level: length = sessions there, colour = whether the level fit the stakes.
     Each count opens the sessions behind it, right under the bar. Sessions are never numbered."""
     placed = [(t, level_index(t.get("level"))) for t in tasks]
@@ -1069,7 +1069,9 @@ def levels_section(tasks, scores):
               '<span><span class="key seg-key higher"></span>Could have handed over more%s</span>'
               '<span><span class="key seg-key lower"></span>Handed over too much%s</span></div>') % (none("right"), none("higher"), none("lower"))
     return (head + ('<ul class="lv-facts">%s</ul>' % facts if facts else "") + note + legend
-            + '<div class="lv-chart">%s</div><p class="soft lv-hint">Click a count to see the sessions behind it.</p>' % "".join(rows))
+            + '<div class="lv-chart">%s</div><p class="soft lv-hint">Click a count to see the sessions behind it.%s</p>' % ("".join(rows), (
+                " Not in the bars: %d scheduled run%s that worked without you, which is level 6 (Assistant) work."
+                % (background, "" if background == 1 else "s")) if background else ""))
 
 
 def checked_line(t):
@@ -1244,7 +1246,8 @@ def render_body(r):
         top = max(range(len(LEVELS)), key=lambda i: sum(level_index(t.get("level")) == i for t in tasks))
         sub = ("%d of %d sessions at the right level for what was at stake" % scores["right_level"]
                if "right_level" in scores else "Mostly level %d, %s" % (top + 1, LEVELS[top][0]))
-        folds.append(fold("stairs", "Ways of working", esc(sub), levels_section(tasks, scores), open_=True))
+        runs = r.get("scheduled_runs") if isinstance(r.get("scheduled_runs"), int) and not isinstance(r.get("scheduled_runs"), bool) else 0
+        folds.append(fold("stairs", "Ways of working", esc(sub), levels_section(tasks, scores, max(0, min(runs, 9999))), open_=True))
     if habit_rows(r):
         sub, body = habits_section(r, len(tasks))
         folds.append(fold("chart", "Your habits vs typical", esc(sub), body, open_=True, anchor="habits"))

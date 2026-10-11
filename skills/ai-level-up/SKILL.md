@@ -193,6 +193,7 @@ Write the findings as JSON in the private state folder (local mode: `~/.ai-level
   "tasks": [{"session": "24 Sep · short title", "task": "…", "level": "Agent", "fit": "right | higher | lower",
              "better_level": "only when fit isn't right", "why": "one plain sentence", "checked": true,
              "check_note": "only when checked is false: what wasn't checked, in a few words"}],
+  "scheduled_runs": "local mode: copy aggregate.automated_sessions (runs that worked without the person)",
   "behaviours": {"1": "7 of 8", "11": "4 of 8"},
   "habit_notes": {"2": "7 Oct · Trina agenda: one line on where this habit would have helped"},
   "levels": {"Claude Code": "mostly Workflows; Agent for policy work"},
