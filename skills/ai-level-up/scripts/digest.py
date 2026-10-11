@@ -168,7 +168,7 @@ PII_PATTERNS = [
     ("[number]", re.compile(r"\b\d{7,}\b")),
 ]
 TOKEN = re.compile(r"[A-Za-z0-9_\-]{25,}")
-URL = re.compile(r"(https?://)(?:[^\s/?#@\"'<>)\]]*@)?([^\s/?#\"'<>)\]]+)[^\s\"'<>)\]]*")
+URL = re.compile(r"(https?://)(?:[^\s/?#@\"'<>)\]]*@)?(\[[^\]\s]+\](?::\d+)?|[^\s/?#\"'<>)\]]+)[^\s\"'<>)\]]*", re.IGNORECASE)
 SLACK_ID = re.compile(r"\b[UWFCDGT](?=[A-Z0-9]*\d[A-Z0-9]*\d)[A-Z0-9]{8,11}\b")
 
 

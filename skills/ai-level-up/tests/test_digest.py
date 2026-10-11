@@ -171,6 +171,8 @@ class Masking(unittest.TestCase):
         self.assertEqual(digest.mask("see https://example.com#private-id"), "see https://example.com/…")
         self.assertEqual(digest.mask("https://me:hunter2@example.com/x"), "https://example.com/…")
         self.assertEqual(digest.mask("at https://docs.google.com/ today"), "at https://docs.google.com today")
+        self.assertEqual(digest.mask("HTTPS://example.com?document=private-id"), "HTTPS://example.com/…")
+        self.assertEqual(digest.mask("https://[::1]:8080/private-id?document=x"), "https://[::1]:8080/…")
 
     def test_dates_and_words_survive(self):
         self.assertEqual(digest.mask("on 2026-09-19 at 9:30am, nsls-personal-toolkit-cowork"),
