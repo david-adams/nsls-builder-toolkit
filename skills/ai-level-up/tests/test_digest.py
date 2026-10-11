@@ -142,6 +142,8 @@ class Masking(unittest.TestCase):
         self.check("key sk-ant-abcdefghijklmnopqrstuvwxyz123", "abcdefghijk", "anthropic_key")
         self.check('{"client_secret": "s3cr3tvalue99"}', "s3cr3tvalue99", "credential")
         self.check("password=hunter2hunter2", "hunter2", "credential")
+        self.check('password: "my long pass phrase"', "phrase", "credential")   # quoted values go whole
+        self.check("secret = 'ab cd'", "ab cd", "credential")
         self.check("Authorization: Bearer abcdef0123456789abcdef", "abcdef0123456789", "bearer_token")
         self.check("-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nABCDEF\n-----END RSA PRIVATE KEY-----", "MIIEow", "private_key")
         self.check("-----BEGIN PRIVATE KEY-----\nMIIEow but never closed", "MIIEow", "private_key")
@@ -275,6 +277,13 @@ class Cowork(Home):
         quiet(digest.main, ["config", "email=me@nsls.org"])
         self.assertEqual([s["title"] for s in self.scan()["sessions"]], ["Work task"])
 
+    def test_a_lone_account_that_isnt_yours_is_skipped(self):
+        self.cowork("local_1", {"title": "Someone else's task", "emailAddress": "bob@nsls.org"}, ["a", "b", "c"])
+        quiet(digest.main, ["config", "email=me@nsls.org"])
+        d = self.scan()
+        self.assertEqual(d["sessions"], [])
+        self.assertTrue(any("isn't your work email" in n for n in d["notes"]))
+
     def test_non_coder_week(self):
         for i, t in enumerate(["Summarise the benefits PDF", "Draft chapter email", "Clean up the events sheet", "Plan Monday"]):
             self.cowork("local_%d" % i, {"title": t}, ["do it", "shorter please", "thanks"])
@@ -308,6 +317,7 @@ class SettingsAndHistory(Home):
         self.assertEqual(run["behaviours"], {"1": "3/8"})
         self.assertEqual(run["seen"], {"code": 3})
         self.assertEqual(run["experiments"][0]["direction"], "same+check")
+        self.assertEqual(digest.clean_run(run)["seen"], {"code": 3})  # survives a reload from history
 
     def test_private_permissions(self):
         quiet(digest.main, ["config", "frequency=weekly"])
@@ -519,6 +529,26 @@ class ScanModes(Home):
         d = self.run_scan("--since-last")
         self.assertEqual(d["window"]["basis"], "fresh")
         self.assertTrue(any("fresh check-in" in n for n in d["notes"]))
+
+    def test_widening_ignores_command_only_sessions(self):
+        for i in range(2):
+            self.code_session("login%d" % i, [user("<command-name>/login</command-name>", ts=iso(1))])
+        self.code_session("real", [user("draft it", ts=iso(10)), user("b", ts=iso(10)), user("c", ts=iso(10))])
+        d = self.run_scan("--max-per-surface", "2")
+        self.assertGreater(d["window"]["days"], 7)  # two /login sessions do not count as enough to read
+        self.assertEqual(len(d["sessions"]), 1)
+
+    def test_a_newer_scan_does_not_move_an_older_drafts_cutoff(self):
+        self.code_session("s", [user("a"), user("b"), user("c")])
+        path = os.path.join(self.home, "r.json")
+        with open(path, "w") as fh:
+            json.dump({"date": "2026-10-11", "tasks": []}, fh)
+        old = time.time() - 600
+        os.utime(path, (old, old))  # the draft was written before the latest scan
+        self.run_scan()
+        quiet(digest.main, ["render", path])
+        with open(digest.history_path()) as fh:
+            self.assertIsNone(json.loads(fh.readline())["covered_to"])
 
     def test_render_records_where_the_reading_stopped(self):
         self.code_session("s", [user("a"), user("b"), user("c")])

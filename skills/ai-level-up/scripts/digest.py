@@ -158,7 +158,7 @@ SECRET_PATTERNS = [
     ("slack_token", re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}")),
     ("bearer_token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=\-]{16,}")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")),
-    ("credential", re.compile(r"(?i)[\"']?\b(?:api[_\- ]?key|secret|token|password|passwd|pwd|client[_\- ]?secret|access[_\- ]?key)\b[\"']?\s*[:=]\s*[\"']?[^\s\"',;}]{6,}")),
+    ("credential", re.compile(r"(?i)[\"']?\b(?:api[_\- ]?key|secret|token|password|passwd|pwd|client[_\- ]?secret|access[_\- ]?key)\b[\"']?\s*[:=]\s*(?:\"[^\"\n]{1,300}\"|'[^'\n]{1,300}'|[^\s\"',;}]{6,})")),
 ]
 PII_PATTERNS = [
     ("[email]", EMAIL),
@@ -586,10 +586,10 @@ def scan_cowork(since, notes, email):
         if isinstance(meta, dict):
             metas.append((meta_path, meta))
     accounts = {str(m.get("emailAddress")).lower() for _, m in metas if m.get("emailAddress")}
-    if len(accounts) > 1:
+    if accounts and (len(accounts) > 1 or email):
         if not email or email.lower() not in accounts:
-            notes.append("cowork: several Claude accounts on this computer and none confirmed as yours; "
-                         "Cowork skipped (say 'my work email is …' to include it)")
+            notes.append("cowork: %s, and none confirmed as yours; Cowork skipped (say 'my work email is …' to include it)"
+                         % ("several Claude accounts on this computer" if len(accounts) > 1 else "the Cowork account here isn't your work email"))
             return root, []
         metas = [(p, m) for p, m in metas if str(m.get("emailAddress")).lower() == email.lower()]
     out, unreadable = [], 0
@@ -680,11 +680,16 @@ def driven(sessions):
     return [s for s in sessions if not s["automated"] and s["turns"]]
 
 
+def readable(sessions):
+    """Driven sessions worth reading closely: at least one turn that isn't a slash command."""
+    return [s for s in driven(sessions) if any(t["kind"] != "command" for t in s["turns"])]
+
+
 def sample(sessions, k, prefer_new=False):
     """Pick up to k sessions a person actually drove, most substantial first, one per project
     before any project gets a second. A since-last check-in reads new sessions before older
     ones; a session that is only slash commands (/login, /model) is never read closely."""
-    pool = [s for s in driven(sessions) if any(t["kind"] != "command" for t in s["turns"])]
+    pool = readable(sessions)
     pool.sort(key=lambda s: (s["earlier"] if prefer_new else False, -len(s["turns"]), -sum(s["signals"]["tools"].values()), s["id"]))
     picked, projects = [], set()
     for s in pool:
@@ -773,7 +778,8 @@ def clean_run(run):
     covered = parse_ts(run.get("covered_to"))
     out["covered_to"] = covered.isoformat() if covered else None
     out["stage"] = run.get("stage") if run.get("stage") in STAGES else None
-    seen = run.get("seen_counts") if isinstance(run.get("seen_counts"), dict) else {}
+    seen = run.get("seen_counts") if isinstance(run.get("seen_counts"), dict) else run.get("seen")
+    seen = seen if isinstance(seen, dict) else {}  # a saved history line keeps them under "seen"
     out["seen"] = {k: seen[k] for k in ("code", "cowork", "chat") if isinstance(seen.get(k), int)}
     levels = run.get("levels") if isinstance(run.get("levels"), dict) else {}
     out["levels"] = {safe(k, 40): safe(v, 80) for k, v in list(levels.items())[:4]}
@@ -1309,7 +1315,12 @@ def cmd_render(args):
     if not report.get("covered_to"):  # where this check-in's reading stopped, for the next --since-last
         latest = load_json(digest_path(), {})
         made = parse_ts(latest.get("generated")) if isinstance(latest, dict) else None
-        if made and dt.datetime.now(dt.timezone.utc) - made < dt.timedelta(days=3):
+        try:
+            drafted = dt.datetime.fromtimestamp(os.path.getmtime(args.file), tz=dt.timezone.utc)
+        except OSError:
+            drafted = None
+        # only a scan made before this draft was written can be the one it came from
+        if made and drafted and made <= drafted and drafted - made < dt.timedelta(days=3):
             report["covered_to"] = (latest.get("window") or {}).get("to")
     date = str(report.get("date") or "")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
@@ -1372,7 +1383,7 @@ def cmd_scan(args):
             notes_now = []
             since = now - dt.timedelta(days=days)
             found = gather(since, email, notes_now)
-            if sum(len(driven(ss)) for _, ss in found.values()) >= args.max_per_surface:
+            if sum(len(readable(ss)) for _, ss in found.values()) >= args.max_per_surface:
                 break
         notes.extend(notes_now)
     days = max(1, -(-int((now - since).total_seconds()) // 86400))

@@ -177,6 +177,7 @@ Write the findings as JSON in the private state folder (local mode: `~/.ai-level
 {
   "date": "YYYY-MM-DD", "window_days": 7, "mode": "local | chat | project",
   "basis": "fresh | since-last (copy window.basis)", "since_date": "copy window.since_checkin, or leave out",
+  "covered_to": "copy window.to (where this check-in's reading stopped)",
   "seen": "Claude Code (74 sessions, 8 read closely) · Cowork: none this week · Not seen: claude.ai chats (ask me there)",
   "seen_counts": {"code": 74, "cowork": 0, "chat": 0},
   "stage": "Maker or null", "unlock": "Kevin's wording; for Steward: 'Next: make what you built runnable by others, and take on more.'", "toward_unlock": "one real task + the one action",
@@ -240,7 +241,7 @@ After the report, ask once: "How often should I check in: weekly (recommended), 
 - Local mode: `digest.py config frequency=<choice>`.
 - Chat mode: in the summary block.
 
-**Schedule it.**
+**If they chose weekly or monthly, schedule it.** For "never", create nothing (and delete `ai-level-up-checkin` if it exists).
 
 - **Desktop app**, if you have a create-scheduled-task tool:
   - Create task `ai-level-up-checkin`.
