@@ -1,6 +1,6 @@
 {
   "name": "nsls-builder-toolkit",
-  "version": "3.21.3",
+  "version": "3.22.0",
   "description": "NSLS organization skills for tracking, designing, deploying, presenting, and researching. Changes go through GitHub PRs. Personal productivity skills live locally in ~/.claude/skills/.",
   "author": {
     "name": "NSLS",
