@@ -500,6 +500,15 @@ class ScanModes(Home):
         self.assertEqual([t["text"] for t in old["turns"]], ["after"])    # only the new part of an old session
         self.assertEqual(d["surfaces"]["code"]["carried_over"], 1)
 
+    def test_fresh_sample_reads_the_most_substantial_sessions(self):
+        self.code_session("long-old", [user("old %d" % i, ts=iso(9)) for i in range(2)] + [user("w%d" % i, ts=iso(2)) for i in range(6)])
+        self.code_session("short-new", [user("hi", ts=iso(1))])
+        self.code_session("login", [user("<command-name>/login</command-name>", ts=iso(1))])
+        d = self.run_scan("--max-per-surface", "1", "--days", "7")
+        self.assertEqual([s["human_turns"] for s in d["sessions"]], [6])  # started before the window, still read first
+        d = self.run_scan("--days", "7")
+        self.assertNotIn("/login", json.dumps(d["sessions"]))              # command-only sessions are never read closely
+
     def test_since_last_without_a_record_is_a_fresh_check_in(self):
         self.code_session("s", [user("a"), user("b"), user("c")])
         d = self.run_scan("--since-last")

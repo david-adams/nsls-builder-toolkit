@@ -680,22 +680,18 @@ def driven(sessions):
     return [s for s in sessions if not s["automated"] and s["turns"]]
 
 
-def sample(sessions, k):
-    """Pick up to k sessions a person actually drove: new sessions before ones carried over
-    from an earlier window, then varied in project and length."""
-    pool = [s for s in driven(sessions) if len(s["turns"]) >= 3]
-    if len(pool) < k:
-        pool = driven(sessions)
-    pool.sort(key=lambda s: (s["earlier"], -len(s["turns"]), s["id"]))
+def sample(sessions, k, prefer_new=False):
+    """Pick up to k sessions a person actually drove, most substantial first, one per project
+    before any project gets a second. A since-last check-in reads new sessions before older
+    ones; a session that is only slash commands (/login, /model) is never read closely."""
+    pool = [s for s in driven(sessions) if any(t["kind"] != "command" for t in s["turns"])]
+    pool.sort(key=lambda s: (s["earlier"] if prefer_new else False, -len(s["turns"]), -sum(s["signals"]["tools"].values()), s["id"]))
     picked, projects = [], set()
-    for s in pool:  # one per project first, longest first
+    for s in pool:
         if len(picked) < k and s["project"] not in projects:
             picked.append(s)
             projects.add(s["project"])
-    for earlier in (False, True):  # then fill, alternating long and short, new sessions first
-        rest = [s for s in pool if s not in picked and s["earlier"] == earlier]
-        while len(picked) < k and rest:
-            picked.append(rest.pop(0 if len(picked) % 2 else -1))
+    picked += [s for s in pool if s not in picked][:k - len(picked)]
     picked.sort(key=lambda s: s["start"] or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
     return picked
 
@@ -1382,7 +1378,7 @@ def cmd_scan(args):
             surfaces[name] = {"found": False}
             continue
         active = [s for s in mine if s["turns"] or s["signals"]["tools"]]
-        picked = sample(active, args.max_per_surface)
+        picked = sample(active, args.max_per_surface, prefer_new=basis == "since-last")
         surfaces[name] = {"found": True, "aggregate": aggregate(active), "sampled": len(picked),
                           "carried_over": sum(1 for s in picked if s["earlier"])}
         digests.extend(shape(s, i) for i, s in enumerate(picked, 1))
