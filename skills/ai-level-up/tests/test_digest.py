@@ -221,6 +221,18 @@ class Signals(Home):
         self.assertEqual(d["surfaces"]["code"]["aggregate"]["automated_sessions"], 1)
         self.assertTrue(any("own runs" in n for n in d["notes"]))
 
+    def test_a_moved_session_counts_once(self):
+        turns = [dict(user("turn %d" % i), uuid="u%d" % i) for i in range(4)]
+        self.code_session("original", turns[:3])
+        d = os.path.join(self.home, ".claude", "projects", "-work-moved")
+        os.makedirs(d)
+        with open(os.path.join(d, "moved.jsonl"), "w") as fh:  # the copy holds the history plus one new turn
+            for r in turns:
+                fh.write(json.dumps(r) + "\n")
+        dg = self.scan()
+        self.assertEqual([s["human_turns"] for s in dg["sessions"]], [4])
+        self.assertTrue(any("counted once" in n for n in dg["notes"]))
+
     def test_headless_runs_are_automated_and_not_sampled(self):
         self.code_session("cron", [dict(user("nightly job"), entrypoint="sdk-cli"), user("b"), user("c")])
         d = self.scan()

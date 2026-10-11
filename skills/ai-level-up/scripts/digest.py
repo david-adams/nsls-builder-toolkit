@@ -401,12 +401,14 @@ def blank_session(surface, sid):
         "pasted_blocks": 0, "pasted_chars": 0, "images": 0, "permission_modes": {},
         "peer_messages_in": 0, "untimed_skipped": 0, "automated": False,
         "automation_reason": None, "secret_flags": set(), "signals": new_signals(),
-        "is_self": False, "slots": set(), "earlier": False,
+        "is_self": False, "slots": set(), "earlier": False, "copies": 0,
     }
 
 
-def ingest_line(s, o, since):
-    """Fold one JSONL record into session s. Only timestamped records inside the window count."""
+def ingest_line(s, o, since, seen=None):
+    """Fold one JSONL record into session s. Only timestamped records inside the window count.
+    seen holds record ids already read: moving a session to another folder copies its history
+    into a new file with the same ids, and each record should count once."""
     if not isinstance(o, dict):
         return
     typ = o.get("type")
@@ -422,6 +424,11 @@ def ingest_line(s, o, since):
     if ts < since:
         s["earlier"] = True  # the session started before this window: only its new part is read
         return
+    if seen is not None and o.get("uuid"):
+        if o["uuid"] in seen:
+            s["copies"] += 1
+            return
+        seen.add(o["uuid"])
     if s["project"] is None and o.get("cwd"):
         s["project"] = safe(os.path.basename(str(o["cwd"]).rstrip("/\\")), 60) or None
     msg = o.get("message") if isinstance(o.get("message"), dict) else {}
@@ -520,14 +527,15 @@ def scan_code(since, notes):
         return None, []
     cutoff = since.timestamp()
     sched = scheduled_prompts()
-    out, unreadable = [], 0
+    out, unreadable, seen, files = [], 0, set(), []
     for f in glob.glob(os.path.join(root, "*", "*.jsonl")):
         try:
             if os.path.getmtime(f) < cutoff:  # transcripts are append-only
                 continue
+            files.append((os.path.getsize(f), f))
         except OSError:
             unreadable += 1
-            continue
+    for _, f in sorted(files, reverse=True):  # the fullest copy of a moved session claims its records
         s = blank_session("code", os.path.splitext(os.path.basename(f))[0])
         entry = None
         try:
@@ -539,7 +547,7 @@ def scan_code(since, notes):
                         continue
                     if entry is None and isinstance(o, dict) and o.get("entrypoint"):
                         entry = o["entrypoint"]
-                    ingest_line(s, o, since)
+                    ingest_line(s, o, since, seen)
         except OSError:
             unreadable += 1
             continue
@@ -550,7 +558,10 @@ def scan_code(since, notes):
         out.append(finish(s))
     if unreadable:
         notes.append("code: %d session files could not be read" % unreadable)
-    return root, out
+    copies = sum(s["copies"] for s in out)
+    if copies:
+        notes.append("code: %d records were copies of a moved session and were counted once" % copies)
+    return root, [s for s in out if s["turns"] or s["signals"]["tools"] or not s["copies"]]
 
 
 def known_email(cfg):
