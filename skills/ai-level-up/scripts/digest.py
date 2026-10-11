@@ -168,8 +168,14 @@ PII_PATTERNS = [
     ("[number]", re.compile(r"\b\d{7,}\b")),
 ]
 TOKEN = re.compile(r"[A-Za-z0-9_\-]{25,}")
-URL = re.compile(r"(https?://[^/\s\"'<>)\]]+)[^\s\"'<>)\]]*")
+URL = re.compile(r"(https?://)(?:[^\s/?#@\"'<>)\]]*@)?([^\s/?#\"'<>)\]]+)[^\s\"'<>)\]]*")
 SLACK_ID = re.compile(r"\b[UWFCDGT](?=[A-Z0-9]*\d[A-Z0-9]*\d)[A-Z0-9]{8,11}\b")
+
+
+def _link(m):
+    """A link keeps its scheme and host only: paths, queries, fragments and logins carry ids."""
+    kept = m.group(1) + m.group(2)
+    return kept + "/…" if m.group(0) not in (kept, kept + "/") else kept
 
 
 def _long_id(m):
@@ -186,7 +192,7 @@ def mask(text, flags=None):
             if flags is not None:
                 flags.add(name)
             text = pat.sub("[REDACTED:%s]" % name, text)
-    text = URL.sub(lambda m: m.group(1) + "/…" if len(m.group(0)) > len(m.group(1)) + 1 else m.group(1), text)
+    text = URL.sub(_link, text)
     for label, pat in PII_PATTERNS:
         text = pat.sub(label, text)
     text = SLACK_ID.sub("[id]", text)
