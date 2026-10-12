@@ -237,8 +237,12 @@ def _git(args, cwd):
 
 
 def build_key(cwd):
-    """`git:<host>/<owner>/<repo>` for a repo with a remote, `git:<root>` for one
-    without, `dir:<folder>` otherwise. Same remote parsing as guardrail-memory."""
+    """`git:<host>/<owner>/<repo>` for a repo with a remote, `local:<root>` for
+    one without, `dir:<folder>` otherwise. Same remote parsing as guardrail-memory.
+
+    Only `git:` keys are remote slugs. A local root used to share the prefix,
+    and on Windows `git:C:/work/project` became the repo link
+    `https://C:/work/project`."""
     cwd = cwd or os.getcwd()
     root = _git(["rev-parse", "--show-toplevel"], cwd)
     if root:
@@ -247,7 +251,7 @@ def build_key(cwd):
              if remote else None)
         if m:
             return f"git:{m.group(1).lower()}/{m.group(2).lower()}"
-        return "git:" + Path(root).resolve().as_posix()
+        return "local:" + Path(root).resolve().as_posix()
     try:
         return "dir:" + Path(cwd).resolve().as_posix()
     except Exception:

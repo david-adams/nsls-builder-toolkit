@@ -481,6 +481,14 @@ log_it.cmd_retry_pending(None)
 check("so nothing is sent for it", not any(p["automation"]["name"] == "Changed mind" for p in sent), repr(sent))
 check("and the no stands", state()["builds"][key17]["names"]["Changed mind"]["outcome"] == "declined")
 
+print("\nonly a remote slug becomes a repo link; a local repo or folder has none")
+norem = make_repo("no-remote")
+check("a repo without a remote gets a local key", core.build_key(str(norem)).startswith("local:"),
+      core.build_key(str(norem)))
+check("a remote slug becomes its https link", log_it.repo_url("git:github.com/thensls/x") == "https://github.com/thensls/x")
+for k in ("local:C:/work/project", "local:/home/me/project", "dir:C:/Users/me/docs", "git:C:/work/project"):
+    check(f"no link for {k}", log_it.repo_url(k) == "")
+
 print("\nthe labels it reports exist in the emitter, and hooks.json registers it")
 import guardrail_emit  # noqa: E402
 for label in ("guardrail_logit_offered", "guardrail_logit_accepted", "guardrail_logit_declined"):

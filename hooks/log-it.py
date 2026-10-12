@@ -172,10 +172,13 @@ def cmd_offer(a):
 
 
 def repo_url(key):
-    if not key.startswith("git:") or key.startswith("git:/"):
+    """A link only for a remote slug (`git:<host>/<owner>/<repo>`); a local
+    repo or a folder has none."""
+    if not key.startswith("git:"):
         return ""
     slug = key[4:]
-    return f"https://{slug}" if "/" in slug else ""
+    host = slug.split("/", 1)[0]
+    return f"https://{slug}" if "/" in slug and "." in host and ":" not in host else ""
 
 
 def register_payload(name, sentence, key, email):
