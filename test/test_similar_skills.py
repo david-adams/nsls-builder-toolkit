@@ -83,6 +83,12 @@ check(f"an identical name still scores, however common its word ({s})", s >= m.T
 s = scdf("weekly plan review", "a weekly planning ritual", "plan review", "reviews a plan")
 check(f"two shared words still count, common or not ({s})", s >= m.THRESHOLD, True)
 check("without word counts the old reading stands", sc(*LOG_IT, *LOG) >= m.THRESHOLD, True)
+def one_shared(word, count):
+    return m.score({word, "alpha"}, {word, "alpha"}, {word}, {word, "beta"}, {word: count} if count else {})
+check("the cutoff is inclusive: a word 3 skills use still counts",
+      one_shared("gamma", m.DISTINCTIVE_DF) >= m.THRESHOLD, True)
+check("and a word 4 skills use does not", one_shared("gamma", m.DISTINCTIVE_DF + 1) < m.THRESHOLD, True)
+check("a word no installed skill uses is distinctive", one_shared("gamma", 0) >= m.THRESHOLD, True)
 check("word counts span name and description, once per skill",
       m.document_frequency({"log": ("log your log", "/a"), "plan": ("make a log", "/b")}),
       {"log": 2, "plan": 1, "make": 1})
