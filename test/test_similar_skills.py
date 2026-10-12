@@ -121,15 +121,51 @@ check("3.10.0 beats 3.9.1", newer("3.9.1", "3.10.0"), "3.10.0")
 check("a non-numeric directory sorts last",
       m._version_key(pathlib.Path("/x/some-branch/skills")) < m._version_key(pathlib.Path("/x/0.0.1/skills")), True)
 
-print("\nroots include a project's own .claude/skills and never repeat one")
-roots = [str(r) for r in m.skill_roots()]
-check("no duplicate roots", len(roots), len(set(roots)))
-check("found roots", len(roots) > 0, True)
+print("\ndiscovery, against a fixture corpus (a CI runner has no installed skills)")
+# Asserting on this machine's own skills made the test pass on a laptop and
+# fail on every clean CI runner (Macroscope, PR #257). The fixture mirrors the
+# real shape: a personal skill, two cached plugin versions of one skill, and
+# enough skills using "log" that the word is common, as it is in practice.
+import os
+import tempfile
+saved_cfg, saved_cwd = os.environ.get("CLAUDE_CONFIG_DIR"), os.getcwd()
 
-print("\ndiscovery is deduplicated across cached plugin versions")
-names = list(m.installed_skills())
-check("no duplicate skill names", len(names), len(set(names)))
-check("found some skills at all", len(names) > 0, True)
+
+def fixture_skill(root, name, desc):
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\n", encoding="utf-8")
+
+
+with tempfile.TemporaryDirectory() as fx:
+    home = pathlib.Path(fx) / ".claude"
+    fixture_skill(home / "skills", "log", "Log session progress to Obsidian project notes")
+    fixture_skill(home / "skills", "log-activity", "Log a sales activity against a deal")
+    fixture_skill(home / "skills", "audit-trail", "Keeps an audit log of every change")
+    fixture_skill(home / "skills", "close-day", "Wrap up the day and log what shipped")
+    cache = home / "plugins" / "cache" / "nsls-toolkit" / "nsls-builder-toolkit"
+    fixture_skill(cache / "3.8.9" / "skills", "macroscope", "An old description")
+    fixture_skill(cache / "3.8.10" / "skills", "macroscope",
+                  "Use when the Macroscope review bot has posted review comments on a pull request")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(home)
+    os.chdir(fx)
+    try:
+        roots = [str(r) for r in m.skill_roots()]
+        check("no duplicate roots", len(roots), len(set(roots)))
+        check("found the fixture's roots", len(roots) >= 3, True)
+        found = m.installed_skills()
+        check("found every fixture skill once",
+              sorted(found), ["audit-trail", "close-day", "log", "log-activity", "macroscope"])
+        check("the newest cached copy wins", "review bot" in found["macroscope"][0], True)
+        check("/log is not offered as a neighbour of the log-it checkpoint", "log" in hits(*LOG_IT), False)
+        check("macroscope is still offered as a neighbour of macroscope-watch",
+              "macroscope" in hits("macroscope-watch", "Waits for the Macroscope review bot to finish on a PR"), True)
+    finally:
+        os.chdir(saved_cwd)
+        if saved_cfg is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = saved_cfg
 
 print("\nit never raises — a crashing duplicate check must not stop a build")
 try:
