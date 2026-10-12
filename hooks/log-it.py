@@ -29,6 +29,7 @@ a log, because it is a registration. Prints what Claude needs; exits 0.
 import argparse
 import json
 import re
+import uuid
 import subprocess
 import sys
 import urllib.error
@@ -44,7 +45,12 @@ try:
 except Exception:  # reporting is never worth failing the answer over
     guardrail_emit = None
 
-PENDING_TTL_DAYS = 14
+# A queued log is retried with backoff until the tracker takes it or refuses
+# it outright. Never dropped for age: the build reads as settled while it waits,
+# so dropping it would lose the credit AND stop the build being offered again.
+RETRY_MAX_HOURS = 24
+INFLIGHT_SECONDS = 120
+PERMANENT_HTTP = (400, 404, 409, 422)  # the tracker refused this payload; retrying won't help
 
 
 def tracker_url():
@@ -142,14 +148,17 @@ def cmd_offer(a):
         b["names"][a.name] = {"outcome": "offered", "at": core.now_iso(), "sentence": a.sentence,
                               "claim": claim or ""}
     report("guardrail_logit_offered", f"exploration log offered: {a.name}", a.name)
-    claim_arg = ["--claim", core._q(claim)] if claim else []
+    # Exact values travel encoded, so the answer records the very name and the
+    # claim finds its row (a parked idea's name comes from the tracker).
+    name_arg = ["--name-b64", core.b64e(a.name)]
+    claim_arg = ["--claim-b64", core.b64e(claim)] if claim else []
     print("Offer for the builder (your words are fine; keep it to a few lines, after your answer to them):")
     for line in lines:
         print("  " + line)
     print("\nTheir answer is recorded with:")
-    print("  yes: " + core.command("accept", a.session, a.key, "--name", core._q(a.name),
-                                   "--sentence", core._q(a.sentence), *claim_arg))
-    print("  no:  " + core.command("decline", a.session, a.key, "--name", core._q(a.name),
+    print("  yes: " + core.command("accept", a.session, a.key, *name_arg,
+                                   "--sentence-b64", core.b64e(a.sentence), *claim_arg))
+    print("  no:  " + core.command("decline", a.session, a.key, *name_arg,
                                    "--note", '"<their reason, if they gave one>"'))
     print("Nothing is sent to anyone unless the builder asks for it.")
 
@@ -176,9 +185,14 @@ def send_registration(payload):
         return bool(res.get("success")), res
     except urllib.error.HTTPError as e:
         try:
-            return False, json.loads(e.read().decode("utf-8", errors="replace") or "{}")
+            body = json.loads(e.read().decode("utf-8", errors="replace") or "{}")
         except Exception:
-            return False, {"error": f"HTTP {e.code}"}
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        body.setdefault("error", f"HTTP {e.code}")
+        body["status"] = e.code
+        return False, body
     except Exception as e:
         return False, {"error": type(e).__name__}
 
@@ -206,7 +220,8 @@ def cmd_accept(a):
         if ok:
             entry["record_id"] = (res.get("automation") or {}).get("record_id", "")
         else:
-            data["pending"].append({"payload": payload, "key": a.key, "name": a.name, "created": core.now_iso()})
+            data["pending"].append({"id": uuid.uuid4().hex, "payload": payload, "key": a.key, "name": a.name,
+                                    "created": core.now_iso(), "attempts": 1, "next_try": core.now_iso()})
         b["names"][a.name] = entry
     if ok:
         logged(a.name, res)
@@ -253,28 +268,74 @@ def cmd_settled(a):
     print("Recorded. Nothing to show the builder.")
 
 
+def _due_items(data, now):
+    """Claim the items whose turn it is, so a concurrent retry skips them. Each
+    stays in the durable queue until its delivery is acknowledged: a retry
+    killed mid-send loses nothing (a resend is harmless, the tracker finds the
+    row by name and credits it once)."""
+    claimed = []
+    for item in data.get("pending", []):
+        item.setdefault("id", uuid.uuid4().hex)
+        nxt = core._parse(item.get("next_try", "")) or now
+        busy = core._parse(item.get("inflight_until", ""))
+        if nxt <= now and not (busy and busy > now):
+            item["inflight_until"] = (now + core.timedelta(seconds=INFLIGHT_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            claimed.append(dict(item))
+    return claimed
+
+
 def cmd_retry_pending(_a):
+    now = core.datetime.now(core.timezone.utc)
     with core.locked() as data:
-        queue = list(data.get("pending", []))
-        data["pending"] = []
-    keep = []
-    for item in queue:
-        created = core._parse(item.get("created", ""))
-        if created is None or (core.datetime.now(core.timezone.utc) - created).days > PENDING_TTL_DAYS:
-            continue
+        claimed = _due_items(data, now)
+    for item in claimed:
         ok, res = send_registration(item.get("payload", {}))
-        if ok:
-            with core.locked() as data:
-                b = core.build(data, item.get("key", ""))
-                entry = b["names"].get(item.get("name", ""), {})
-                entry.update(outcome="logged", record_id=(res.get("automation") or {}).get("record_id", ""))
-                b["names"][item.get("name", "")] = entry
-            logged(item.get("name", ""), res)
-        else:
-            keep.append(item)
-    if keep:
+        status = res.get("status") if isinstance(res, dict) else None
         with core.locked() as data:
-            data["pending"] = keep + data.get("pending", [])
+            queue = data.get("pending", [])
+            current = next((q for q in queue if q.get("id") == item["id"]), None)
+            b = core.build(data, item.get("key", ""))
+            name = item.get("name", "")
+            if ok or status in PERMANENT_HTTP:
+                data["pending"] = [q for q in queue if q.get("id") != item["id"]]
+            if ok:
+                entry = b["names"].get(name, {})
+                entry.update(outcome="logged", record_id=(res.get("automation") or {}).get("record_id", ""))
+                b["names"][name] = entry
+            elif status in PERMANENT_HTTP:
+                # Refused for good (no such builder, say): reopen the build so it can
+                # be offered again, instead of leaving it "settled" with no row.
+                b["names"][name] = {"outcome": "offered", "at": core.now_iso(),
+                                    "note": f"tracker refused the log: {res.get('error', status)}"}
+            elif current is not None:
+                current["attempts"] = current.get("attempts", 1) + 1
+                hours = min(2 ** (current["attempts"] - 1), RETRY_MAX_HOURS)
+                current["next_try"] = (now + core.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                current.pop("inflight_until", None)
+        if ok:
+            logged(name, res)
+
+
+def open_checkpoint(key, hours=6):
+    """The session whose checkpoint is still waiting on this build, if any.
+
+    A builder can ask to log something themselves (the register-automation and
+    interrogate skills run `offer` without a session). If the checkpoint asked
+    in that session too, the answer belongs to it; otherwise the Stop hook
+    would remind Claude about a question it had in effect just answered.
+    """
+    cutoff = core.datetime.now(core.timezone.utc) - core.timedelta(hours=hours)
+    best, best_at = None, None
+    for sid, s in load_sessions().items():
+        asked = core._parse(s.get("asked_at", ""))
+        if s.get("key") == key and asked and asked >= cutoff and not s.get("answer"):
+            if best_at is None or asked > best_at:
+                best, best_at = sid, asked
+    return best
+
+
+def load_sessions():
+    return core.load().get("sessions", {})
 
 
 def main(argv):
@@ -288,8 +349,20 @@ def main(argv):
     p.add_argument("--note", default="")
     p.add_argument("--reason", default="")
     p.add_argument("--email", default="")
+    for field in ("key", "name", "sentence", "claim"):
+        p.add_argument(f"--{field}-b64", default="", dest=f"{field}_b64")
     a = p.parse_args(argv)
+    for field in ("key", "name", "sentence", "claim"):
+        token = getattr(a, f"{field}_b64")
+        if token:
+            try:
+                setattr(a, field, core.b64d(token))
+            except Exception:
+                print(f"--{field}-b64 is not a valid encoded value; nothing was recorded.")
+                return
     a.key = a.key or core.build_key(None)
+    if a.session == "manual":
+        a.session = open_checkpoint(a.key) or "manual"
     a.name = " ".join(a.name.split())[:120]
     a.sentence = " ".join(a.sentence.split())[:500]
     if a.command in ("offer", "accept", "decline", "settled") and not a.name:

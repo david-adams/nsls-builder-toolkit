@@ -229,6 +229,17 @@ def main():
     g5 = fresh(tmp / "e", good)
     (tmp / "e").mkdir(exist_ok=True)
     g5.SEEN_FILE = tmp / "e" / "seen.json"
+    # The detached child is a separate process: the builder_email patches above
+    # don't reach it, so it resolves the email itself. Give it a test identity.
+    # Without one it borrowed the developer's own git email on a laptop and
+    # found none on a clean CI runner, where nothing was sent (Windows job,
+    # PR #259).
+    child_cfg = tmp / "e" / "cfg"
+    (child_cfg / "local-plugins" / "nsls-personal-toolkit").mkdir(parents=True, exist_ok=True)
+    (child_cfg / "local-plugins" / "nsls-personal-toolkit" / ".env").write_text(
+        "BUILDER_EMAIL=probe.builder@nsls.org\n", encoding="utf-8")
+    saved_cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(child_cfg)
     t0 = time.time()
     g5.emit_detached("flagged", "detached probe", dedupe=False)
     elapsed = time.time() - t0
@@ -238,6 +249,10 @@ def main():
         if received:
             break
         time.sleep(0.1)
+    if saved_cfg is None:
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        os.environ["CLAUDE_CONFIG_DIR"] = saved_cfg
     check("and the event still arrives", bool(received),
           "the detached child never delivered")
     if received:

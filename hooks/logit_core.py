@@ -29,6 +29,7 @@ one of those.
 MEMORY IS LOCAL. Declines and logs live in this config dir, like every other
 guardrail memory. A second machine or a fresh Cowork VM may ask once more.
 """
+import base64
 import json
 import os
 import re
@@ -156,7 +157,17 @@ class locked:
         try:
             import fcntl
             self.fh = open(lock, "w")
-            fcntl.flock(self.fh, fcntl.LOCK_EX)
+            deadline = time.monotonic() + self.LOCK_WAIT
+            while True:
+                try:
+                    fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        self.fh.close()
+                        self.fh = None  # fall open rather than hold up the prompt
+                        break
+                    time.sleep(0.05)
         except ImportError:
             deadline = time.monotonic() + self.LOCK_WAIT
             excl = lock.with_suffix(".lockx")
@@ -294,6 +305,12 @@ def scan(sess, transcript_path):
         return
     end = chunk.rfind(b"\n")
     if end < 0:
+        # One record bigger than the whole budget (a huge tool result, say):
+        # step past it, or every later prompt rereads the same bytes and the
+        # count never moves again. A shorter chunk is a line still being
+        # written, so wait for it.
+        if len(chunk) >= SCAN_BUDGET_BYTES:
+            sess["offset"] = sess.get("offset", 0) + len(chunk)
         return
     for raw in chunk[: end + 1].splitlines():
         try:
@@ -378,8 +395,23 @@ def _q(value):
     return '"' + " ".join(str(value).translate(_UNSAFE).split()) + '"'
 
 
+def b64e(value):
+    """Lossless and inert in any shell: [A-Za-z0-9_-] only."""
+    return base64.urlsafe_b64encode(str(value).encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def b64d(token):
+    token = str(token or "").strip()
+    return base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("utf-8")
+
+
 def command(sub, sid, key, *rest):
-    parts = ["bash", _q(launcher()), "logit", sub, "--session", _q(sid), "--key", _q(key)]
+    """A helper command for Claude to copy. Values the toolkit supplies (the
+    build key here; names from the tracker in log-it) travel base64-encoded:
+    stripping shell characters instead lost them ("Budget $ Forecast" came
+    back as a different name and made a twin), and quoting that survives both
+    Git Bash and PowerShell does not exist."""
+    parts = ["bash", _q(launcher()), "logit", sub, "--session", _q(sid), "--key-b64", b64e(key)]
     return " ".join(parts + list(rest))
 
 
