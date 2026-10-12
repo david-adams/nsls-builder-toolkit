@@ -248,8 +248,9 @@ quietly installs the NSLS Claude usage collector in the background when it's
 missing. That's the same installer as the self-serve link, at most once a
 day and five times in all. It prints nothing. The builder hears about it
 through Signal's enrollment DM. If a builder asks what it is: it sends a
-summary of each session (app, models, token counts, skill and tool names,
-branch name), never prompts, responses or files. Questions go to Davo Wood.
+summary of each session (for example the app, models, timing, token counts,
+skill and tool names, and branch name), never prompts, responses or files.
+The full list is at signal.nsls.org/me/machines. Questions go to Davo Wood.
 Details are in the README under "Claude Usage Reporter".
 
 ## Google Workspace
