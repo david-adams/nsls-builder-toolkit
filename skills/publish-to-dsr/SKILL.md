@@ -106,4 +106,4 @@ the dashboard; do not ask them to paste the token into chat.
 
 ## Tests
 
-`node --test "${CLAUDE_PLUGIN_ROOT}/skills/publish-to-dsr/scripts/"` (logic lives in `scripts/lib.mjs`).
+`node --test "${CLAUDE_PLUGIN_ROOT}/skills/publish-to-dsr/scripts/lib.test.mjs"` (logic lives in `scripts/lib.mjs`; Node 22 does not accept a bare directory here).
