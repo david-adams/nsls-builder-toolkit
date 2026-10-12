@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""The exploration log's checkpoint asks at the right moment, once, and records
+every answer.
+
+Plain stdlib: `python3 hooks/tests/test_logit_checkpoint.py`.
+
+"Log it" was a paragraph asking Claude to notice, mid-task, that a build had
+become worth credit. It was offered zero times in the org (0 of 159 tracker rows
+at Exploring, 2026-10-11). The checkpoint moves the moment into hooks: they
+decide WHEN to ask from the session's work, Claude decides WHETHER it is worth
+an offer, and nothing about the answer is silent.
+
+Every subprocess runs sandboxed: its own config dir, no git identity, and a dead
+tracker URL, because `offer` and `accept` talk to the tracker and a test that
+forgets that writes real rows under the developer's name.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+HOOKS = Path(__file__).resolve().parents[1]
+WINDOWS = os.name == "nt"
+failures = []
+
+
+def check(name, cond, detail=""):
+    print(f"  {'ok  ' if cond else 'FAIL'} {name} {'' if cond else detail}")
+    if not cond:
+        failures.append(name)
+
+
+def git_bash():
+    if not WINDOWS:
+        return shutil.which("bash")
+    git = shutil.which("git")
+    for cand in ([Path(git).resolve().parents[1] / "bin" / "bash.exe"] if git else []) + [
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"]:
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+TMP = Path(tempfile.mkdtemp(prefix="logit-test-"))
+HOME = TMP / "home"
+(HOME / ".claude").mkdir(parents=True)
+GITCFG = TMP / "gitconfig"
+GITCFG.write_text("", encoding="utf-8")
+ENV = dict(os.environ, HOME=str(HOME), USERPROFILE=str(HOME), CLAUDE_CONFIG_DIR=str(HOME / ".claude"),
+           GIT_CONFIG_GLOBAL=str(GITCFG), GIT_CONFIG_NOSYSTEM="1", NSLS_TRACKER_URL="http://127.0.0.1:9",
+           PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+STATE = HOME / ".claude" / ".nsls-logit-state.json"
+
+
+def make_repo(name, remote=None):
+    repo = TMP / name
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], env=ENV, timeout=30)
+    if remote:
+        subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", remote], env=ENV, timeout=30)
+    return repo
+
+
+def transcript(path, prompts, changes, reads=0, extra=(), mode="w"):
+    """A transcript with `prompts` builder messages and `changes` change tools.
+    mode="a" appends, as a live session's transcript only ever grows."""
+    lines = []
+    for i in range(prompts):
+        lines.append({"type": "user", "message": {"role": "user", "content": f"step {i}"}})
+        if i == 0:
+            for _ in range(changes):
+                lines.append({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "Edit", "input": {}}]}})
+                lines.append({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "content": "ok"}]}})
+            for _ in range(reads):
+                lines.append({"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "Read", "input": {}}]}})
+    lines += list(extra)
+    with open(path, mode, encoding="utf-8") as fh:
+        fh.write("".join(json.dumps(l) + "\n" for l in lines))
+
+
+def hook(event, sid, cwd, tpath, **extra):
+    payload = {"hook_event_name": event, "session_id": sid, "cwd": str(cwd), "transcript_path": str(tpath)}
+    payload.update(extra)
+    t0 = time.monotonic()
+    r = subprocess.run([sys.executable, str(HOOKS / "logit-checkpoint.py")], input=json.dumps(payload),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV,
+                       cwd=str(cwd), timeout=60)
+    return r, time.monotonic() - t0
+
+
+def helper(*args, cwd=None):
+    return subprocess.run([sys.executable, str(HOOKS / "log-it.py"), *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", env=ENV, cwd=str(cwd or TMP), timeout=120)
+
+
+def state():
+    return json.loads(STATE.read_text(encoding="utf-8"))
+
+
+def key_in(text):
+    m = re.search(r'--key "([^"]+)"', text)
+    return m.group(1) if m else None
+
+
+print("quiet until a session has done real work")
+repo = make_repo("knowledge-base", "https://github.com/someone/knowledge-base.git")
+tp = TMP / "s1.jsonl"
+transcript(tp, prompts=2, changes=3)
+r, _ = hook("UserPromptSubmit", "s1", repo, tp)
+check("2 messages and 3 changes: nothing asked", r.stdout.strip() == "" and r.returncode == 0, repr(r.stdout[:200]))
+tpb = TMP / "s1b.jsonl"
+transcript(tpb, prompts=5, changes=0, reads=40)
+r, _ = hook("UserPromptSubmit", "s1b", repo, tpb)
+check("reading and searching is not work: nothing asked", r.stdout.strip() == "", repr(r.stdout[:200]))
+
+print("\nasks once the work is real, where the builder can't see it")
+transcript(tp, prompts=1, changes=3, mode="a")   # now 3 messages, 6 changes
+r, secs = hook("UserPromptSubmit", "s1", repo, tp)
+out = r.stdout
+check("6 changes across 3 messages: the question is asked", "exploration log checkpoint" in out, repr(out[:200]))
+check("it names this session and this build in its commands",
+      '--session "s1"' in out and key_in(out) == "git:github.com/someone/knowledge-base", repr(out[:400]))
+check("its commands go through run-hook.sh, never a bare python3",
+      'run-hook.sh" logit offer' in out and not re.search(r"(^|\s)python3\s", out))
+check("it says answering never holds up the builder's request", "never holds up" in out)
+check(f"and it is quick ({secs:.2f}s)", secs < 5)
+r, _ = hook("UserPromptSubmit", "s1", repo, tp)
+check("asked once: the next message does not ask again", r.stdout.strip() == "", repr(r.stdout[:200]))
+
+print("\nan unanswered question gets one reminder, then is recorded as ignored")
+r, _ = hook("Stop", "s1", repo, tp)
+try:
+    reminder = json.loads(r.stdout)["hookSpecificOutput"]
+except Exception:
+    reminder = {}
+check("the first stop continues Claude with a plain-facts reminder",
+      reminder.get("hookEventName") == "Stop" and "still unanswered" in reminder.get("additionalContext", ""),
+      repr(r.stdout[:300]))
+r, _ = hook("Stop", "s1", repo, tp)
+check("the second stop says nothing more", r.stdout.strip() == "", repr(r.stdout[:200]))
+check("and records it as ignored", state()["sessions"]["s1"]["answer"] == "ignored")
+
+print("\nan answer in the same turn means no reminder")
+repo2 = make_repo("chapter-digest", "git@github.com:thensls/chapter-digest.git")
+tp2 = TMP / "s2.jsonl"
+transcript(tp2, prompts=3, changes=7)
+out = hook("UserPromptSubmit", "s2", repo2, tp2)[0].stdout
+key2 = key_in(out)
+r = helper("not-yet", "--session", "s2", "--key", key2, "--reason", "a quick one-off fix")
+check("`not-yet` records quietly", "Nothing to show the builder" in r.stdout, repr(r.stdout + r.stderr))
+check("and the stop is silent", hook("Stop", "s2", repo2, tp2)[0].stdout.strip() == "")
+transcript(tp2, prompts=4, changes=60, mode="a")  # a long session keeps going
+check("a not-yet is never asked again in the same session, however long it runs",
+      hook("UserPromptSubmit", "s2", repo2, tp2)[0].stdout.strip() == "")
+
+print("\n`offer` works with the tracker down, and says nothing about an empty check")
+r = helper("offer", "--session", "s2", "--key", key2, "--name", "Chapter digest",
+           "--sentence", "Emails chapter presidents a weekly digest of their members' progress", cwd=repo2)
+check("it prints an offer for the builder", "Want me to log \"Chapter digest\"" in r.stdout, repr(r.stdout + r.stderr))
+check("with the commands for their answer", 'logit accept' in r.stdout and 'logit decline' in r.stdout)
+check("and no word about neighbours when none were found",
+      "Heads-up" not in r.stdout and "Good news" not in r.stdout and "clear" not in r.stdout.lower())
+check("it is recorded as offered", state()["builds"][key2]["names"]["Chapter digest"]["outcome"] == "offered")
+
+print("\na decline sticks: that build is never asked about again")
+r = helper("decline", "--session", "s2", "--key", key2, "--name", "Chapter digest", "--note", "just for me")
+check("`decline` records it", "won't be offered again" in r.stdout, repr(r.stdout + r.stderr))
+tp3 = TMP / "s3.jsonl"
+transcript(tp3, prompts=6, changes=20)
+check("a later session in the same repo is not asked", hook("UserPromptSubmit", "s3", repo2, tp3)[0].stdout.strip() == "")
+r = helper("offer", "--session", "s3", "--key", key2, "--name", "Chapter digest", "--sentence", "x y z")
+check("and an explicit offer for it is refused", "isn't offered again" in r.stdout, repr(r.stdout))
+
+print("\n`accept` with the tracker down queues the log instead of losing it")
+ENV_EMAIL = dict(ENV, BUILDER_EMAIL="")
+(HOME / ".claude" / "local-plugins" / "nsls-personal-toolkit").mkdir(parents=True)
+(HOME / ".claude" / "local-plugins" / "nsls-personal-toolkit" / ".env").write_text(
+    "BUILDER_EMAIL=test.builder@nsls.org\n", encoding="utf-8")
+repo4 = make_repo("ops-dashboard", "https://github.com/thensls/ops-dashboard.git")
+key4 = "git:github.com/thensls/ops-dashboard"
+r = helper("accept", "--session", "s4", "--key", key4, "--name", "Ops dashboard",
+           "--sentence", "Shows the support queue's weekly backlog", cwd=repo4)
+check("it says the log is queued", "queued" in r.stdout, repr(r.stdout + r.stderr))
+st = state()
+check("the queued log is complete, at Exploring, owned by the builder",
+      len(st["pending"]) == 1 and st["pending"][0]["payload"]["automation"]["stage"] == "Exploring"
+      and st["pending"][0]["payload"]["builder_email"] == "test.builder@nsls.org"
+      and st["pending"][0]["payload"]["automation"]["github_repo_url"] == "https://github.com/thensls/ops-dashboard")
+check("the build reads as settled, not offered again", st["builds"][key4]["names"]["Ops dashboard"]["outcome"]
+      == "logged-pending")
+helper("retry-pending")
+check("a retry that still can't reach the tracker keeps it queued", len(state()["pending"]) == 1)
+
+print("\na plain folder can hold several builds, so it is never settled wholesale")
+folder = TMP / "scratch"
+folder.mkdir()
+tp5 = TMP / "s5.jsonl"
+transcript(tp5, prompts=3, changes=6)
+out = hook("UserPromptSubmit", "s5", folder, tp5)[0].stdout
+key5 = key_in(out)
+check("a folder build is keyed by the folder", (key5 or "").startswith("dir:"), repr(key5))
+helper("decline", "--session", "s5", "--key", key5, "--name", "Invoice tidy-up", "--note", "personal")
+tp6 = TMP / "s6.jsonl"
+transcript(tp6, prompts=3, changes=6)
+out = hook("UserPromptSubmit", "s6", folder, tp6)[0].stdout
+check("a new session there is still asked, with what is settled listed",
+      "Already settled here" in out and "Invoice tidy-up" in out and "declined" in out, repr(out[:400]))
+r = helper("settled", "--session", "s6", "--key", key5, "--name", "Invoice tidy-up")
+check("and `settled` closes it quietly", "Nothing to show the builder" in r.stdout)
+
+print("\nthree not-yets in a month and it stops asking about that build")
+repo7 = make_repo("one-offs", "https://github.com/someone/one-offs.git")
+key7 = "git:github.com/someone/one-offs"
+for i in range(3):
+    helper("not-yet", "--session", f"n{i}", "--key", key7, "--reason", "scratch work")
+tp7 = TMP / "s7.jsonl"
+transcript(tp7, prompts=5, changes=30)
+check("a fourth is never asked", hook("UserPromptSubmit", "s7", repo7, tp7)[0].stdout.strip() == "")
+
+print("\ncoming back to a build counts: the next session is asked early")
+repo8 = make_repo("rubric-tool", "https://github.com/someone/rubric-tool.git")
+tp8 = TMP / "s8.jsonl"
+transcript(tp8, prompts=2, changes=8)            # real work, but only 2 messages: not asked
+check("a first session with 2 messages is not asked", hook("UserPromptSubmit", "s8", repo8, tp8)[0].stdout.strip() == "")
+tp9 = TMP / "s9.jsonl"
+transcript(tp9, prompts=1, changes=1)
+check("the next session on it is asked at its first change",
+      "exploration log checkpoint" in hook("UserPromptSubmit", "s9", repo8, tp9)[0].stdout)
+
+print("\nconnector writes count as work; connector reads do not")
+sys.path.insert(0, str(HOOKS))
+import logit_core as core  # noqa: E402
+check("a Google Docs update counts", core.is_change("mcp__abc__update_document"))
+check("an Airtable create counts", core.is_change("mcp__b9e0__create_records_for_table"))
+check("an Airtable list does not", not core.is_change("mcp__b9e0__list_records_for_table"))
+check("a search does not", not core.is_change("mcp__x__search_threads"))
+check("Read does not", not core.is_change("Read"))
+
+print("\na shorter transcript is a new one: counts restart instead of going stale")
+sess = {"offset": 10 ** 9, "changes": 99, "prompts": 99}
+transcript(TMP / "short.jsonl", prompts=1, changes=2)
+core.scan(sess, TMP / "short.jsonl")
+check("offset past the end resets the counts", sess["changes"] == 2 and sess["prompts"] == 1, repr(sess))
+
+print("\nthe labels it reports exist in the emitter, and hooks.json registers it")
+import guardrail_emit  # noqa: E402
+for label in ("guardrail_logit_offered", "guardrail_logit_accepted", "guardrail_logit_declined"):
+    check(f"{label} is a known label", label in guardrail_emit.LABELS)
+hooks = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+for event in ("UserPromptSubmit", "Stop"):
+    cmds = [h for g in hooks.get(event, []) for h in g["hooks"]]
+    check(f"{event} runs the checkpoint once, through bash",
+          len(cmds) == 1 and cmds[0]["command"].endswith('run-hook.sh" checkpoint') and cmds[0].get("shell") == "bash",
+          repr(cmds))
+
+print("\nthrough the launcher, the way Claude Code and Claude run it")
+bash = git_bash()
+if not bash:
+    check("bash is available", False, "(no Git Bash found)")
+else:
+    launcher = (HOOKS / "run-hook.sh").as_posix()
+    tp10 = TMP / "s10.jsonl"
+    transcript(tp10, prompts=3, changes=6)
+    repo10 = make_repo("launcher-check", "https://github.com/someone/launcher-check.git")
+    payload = json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s10", "cwd": str(repo10),
+                          "transcript_path": str(tp10)})
+    r = subprocess.run([bash, launcher, "checkpoint"], input=payload, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=ENV, cwd=str(repo10), timeout=60)
+    check("`checkpoint` asks through the launcher", "exploration log checkpoint" in r.stdout, repr(r.stdout[:200] + r.stderr[-200:]))
+    r = subprocess.run([bash, launcher, "logit", "not-yet", "--session", "s10", "--key",
+                        "git:github.com/someone/launcher-check", "--reason", "has spaces in it"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=ENV,
+                       cwd=str(repo10), timeout=60)
+    check("`logit` answers through the launcher, quoted argument intact",
+          "Recorded" in r.stdout and state()["builds"]["git:github.com/someone/launcher-check"].get(
+              "last_not_yet_reason") == "has spaces in it", repr(r.stdout + r.stderr))
+
+shutil.rmtree(TMP, ignore_errors=True)
+print()
+if failures:
+    print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
+    sys.exit(1)
+print("all checks passed")

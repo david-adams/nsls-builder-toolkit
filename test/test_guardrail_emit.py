@@ -93,12 +93,15 @@ def main():
     check("an unknown label is refused, not sent",
           "unknown" in g.emit("noticed", "x") and not received,
           f"received={received}")
-    check("the eight labels are exactly the ones Signal counts",
+    # The exploration log's three labels are a second list in Signal
+    # (EXPLORATION_LOG_LABELS), kept out of its guardrail tiles on purpose.
+    LOGIT = {"guardrail_logit_offered", "guardrail_logit_accepted", "guardrail_logit_declined"}
+    check("Signal's eight guardrail labels plus the exploration log's three, nothing else",
           set(g.LABELS) == {
               "guardrail_flagged", "guardrail_registered", "guardrail_mentor",
               "guardrail_migrated", "guardrail_proceeded", "guardrail_blocked",
               "guardrail_authorized", "guardrail_disputed",
-          },
+          } | LOGIT,
           f"got {sorted(g.LABELS)}")
 
     # Cross-repo contract. Skipped when Signal isn't checked out here, but when
@@ -107,13 +110,25 @@ def main():
                   or "/Volumes/SSK Data/Developer/Projects/employee-profiles")
     ts = signal / "lib" / "guardrails.ts"
     if ts.is_file():
-        text = ts.read_text()
-        block = text[text.index("GUARDRAIL_EVENT_LABELS = ["):]
-        block = block[: block.index("]")]
-        theirs = set(__import__("re").findall(r"'(guardrail_\w+)'", block))
-        check("Signal's label list matches ours", theirs == set(g.LABELS),
-              f"only in Signal: {theirs - set(g.LABELS)} | "
-              f"only in toolkit: {set(g.LABELS) - theirs}")
+        text = ts.read_text(encoding="utf-8")
+
+        def signal_list(const):
+            if f"{const} = [" not in text:
+                return None
+            block = text[text.index(f"{const} = ["):]
+            return set(__import__("re").findall(r"'(guardrail_\w+)'", block[: block.index("]")]))
+
+        theirs = signal_list("GUARDRAIL_EVENT_LABELS") or set()
+        ours = set(g.LABELS) - LOGIT
+        check("Signal's guardrail label list matches ours", theirs == ours,
+              f"only in Signal: {theirs - ours} | only in toolkit: {ours - theirs}")
+        explo = signal_list("EXPLORATION_LOG_LABELS")
+        if explo is None:
+            print("  [skip] this Signal checkout predates its exploration-log labels "
+                  "(thensls/employee-profiles#190); until then Signal ignores them")
+        else:
+            check("Signal's exploration-log labels match ours", explo == LOGIT,
+                  f"Signal: {sorted(explo)}")
     else:
         print("  [skip] Signal checkout not present — cross-repo check skipped")
 

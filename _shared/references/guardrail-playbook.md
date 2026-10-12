@@ -74,44 +74,46 @@ and usually turns reviews round inside a day. Davo covers Tier 2/3 design,
 skills and agentic flows. Jenna covers adoption, UX and HR-ops surfaces. Add a
 domain reviewer when a build crosses into their flow.
 
-## The exploration log ("log it") — full steps
+## The exploration log ("log it")
 
 The tracker used to hear about builds only when they shipped: of 97 rows, just 8
 ever entered at an early stage. That is how Royce's knowledge base and Dejeahn's
 BI tool got built in parallel. The exploration log moves the first record to the
-moment a build becomes real, pitched as credit, never as paperwork.
+moment a build becomes real, pitched as credit, never as paperwork. As a
+paragraph Claude had to remember, it was offered zero times in the org; it now
+runs from a checkpoint hook.
 
-**If they say yes** (about 15 seconds of their time):
+**When it asks.** Once a session has made about six changes (edits, commands,
+connector writes) across three builder messages, or at the first message of a
+later session on a build that already had one, the hook hands Claude the
+question with the builder's next message. The builder does not see it. Volume
+only makes the question eligible: Claude decides whether the work is worth
+credit, because only Claude has the conversation.
 
-1. **Check for neighbours, in both places.** The registry knows what has been
-   registered; the machine knows what has been built. Most skills never get a
-   registry row, so for anything skill-shaped the machine check is the one that
-   finds the neighbour:
+**How Claude answers**, through `bash "<toolkit>/hooks/run-hook.sh" logit ...`
+(the hook prints each command with the session and build filled in):
 
-   ```
-   bash "<toolkit>/hooks/run-hook.sh" similar "<name>" "<their one sentence>"
-   ```
+- `offer` runs both neighbour checks: the skills installed on this machine (what
+  has been built) and the tracker's similar-builds search (what has been
+  registered). It prints the offer for the builder, with any hit worded as an
+  offer to coordinate (a parked idea to claim, a colleague to draft a
+  we-might-overlap note to, a skill covering the same ground), then the two
+  commands for their answer. No hit means saying nothing about the check: the
+  two checks see registered automations and local skills only, so never tell a
+  builder their ground is clear. Nothing is ever sent to anyone automatically.
+- `accept` logs it at Stage `Exploring`, scope Personal, with the builder as
+  owner and the credit that comes with registering. If it matched a parked idea,
+  it claims that row instead of making a twin. If the tracker does not answer,
+  the log is queued and sent at a later message.
+- `decline` records the no; that build is never offered again on this machine.
+- `not-yet` records Claude's judgment that it isn't worth offering yet. Nothing
+  is shown to the builder. It is asked again only after another real stretch of
+  work, at most three times a month per build.
 
-   Then the registry: `POST https://web-production-6281e.up.railway.app/similar`
-   with JSON `{"name": "<name>", "description": "<their one sentence>"}`.
-   - A match with `from_idea_backlog: true`: someone already parked this idea.
-     Offer to claim that row (their builder link, Stage `Exploring`, their
-     description) instead of creating a twin. Frame it as good news.
-   - Another live match: mention it as an offer, never a wall ("Royce logged
-     something adjacent in June; want me to draft him a quick we-might-overlap
-     note?"). Their call entirely. Never send anything automatically.
-   - Nothing: say nothing about the check. A clean result covers registered
-     automations and skills installed on this machine only, so never tell a
-     builder their ground is clear.
-2. **Log it:** `POST https://web-production-6281e.up.railway.app/register-automation-with-builder`
-   with JSON `{"automation": {"name": "<name>", "description": "<their one
-   sentence>", "stage": "Exploring", "scope": "Personal", "github_repo_url":
-   "<repo URL, if one exists>"}, "builder_email": "<their NSLS email>"}`. The
-   email is `git config user.email` when it is an @nsls.org address. Ask none of
-   the checklist, reviewer or design-doc questions: those belong to Tier 2/3
-   shipping. Then report it:
-   `bash "<toolkit>/hooks/run-hook.sh" event registered "<name> logged as an exploration"`.
-3. **Close warm, in one line:** logged, credit recorded, and they own the row.
+An unanswered question gets one reminder at the end of the turn, then is
+recorded as ignored. A git repo is one build, so one answer settles it. A plain
+folder can hold several, so the question lists what has been settled there and
+Claude judges whether today's work is one of them.
 
 **Graduation, not re-registration.** When the build later escalates (someone
 else uses it, it ships, it turns member-facing) the normal tier conversation

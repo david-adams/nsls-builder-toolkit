@@ -32,12 +32,17 @@ For a build that is real but early — no ship, no team, just someone making
 something — use the exploration log instead of full registration. The offer,
 the once-per-build rule, and the decline handling live in
 `${CLAUDE_PLUGIN_ROOT}/_shared/references/guardrail-playbook.md` § The
-exploration log. Mechanics: `POST /similar` first (offer to claim an
-idea-backlog row or an intro on a live match), then
-`POST /register-automation-with-builder` with `stage: "Exploring"`,
-`scope: "Personal"`, and their one-sentence description. Ask none of the
-checklist/reviewer/design-doc questions. Later escalation updates the same row
-via the full flow below.
+exploration log. Run it through the helper, which does both neighbour checks,
+claims a matching idea-backlog row instead of making a twin, registers at
+`stage: "Exploring"`, `scope: "Personal"`, and records the outcome:
+
+```
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" logit offer --name "<short name>" --sentence "<one sentence>"
+```
+
+It prints the offer to show them and the `accept` / `decline` commands for
+their answer. Ask none of the checklist/reviewer/design-doc questions. Later
+escalation updates the same row via the full flow below.
 
 ## Step 1: Detect the Builder
 
