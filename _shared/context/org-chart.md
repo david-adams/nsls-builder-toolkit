@@ -1,5 +1,5 @@
 # NSLS Org Chart
-_Last synced: 2026-10-05_
+_Last synced: 2026-10-12_
 
 ## Business Intelligence
 
@@ -13,7 +13,7 @@ _Last synced: 2026-10-05_
 
 | Name | Title | Manager | Email | Slack |
 |------|-------|---------|-------|-------|
-| Alexis Strauss | Chapter Success Manager (Gold) | James Corriveau | ascott@nsls.org | U08ABVDPWE5 |
+| Alexis Strauss | Chapter Success Manager (Gold) | James Corriveau | astrauss@nsls.org | U08ABVDPWE5 |
 | Allyson Trachtenberg | Strategic Chapter Manager | Marissa Curry | atrachtenberg@nsls.org | U0ANJTQD81L |
 | Alyssa Placeres | Chapter Success Manager (Gold) | James Corriveau | aplaceres@nsls.org | U07TSQZ4THT |
 | Amy Aguirre | Strategic Chapter Manager | Marissa Curry | aaguirre@nsls.org | U0BM85P7KQX |
