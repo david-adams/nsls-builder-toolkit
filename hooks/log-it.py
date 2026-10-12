@@ -142,9 +142,17 @@ def cmd_offer(a):
     lines, claim = offer_text(a.name, a.sentence, skills, registry)
     with core.locked() as data:
         sess = core.session(data, a.session)
+        b = core.build(data, a.key)
+        prior = b["names"].get(a.name, {})
+        if prior.get("outcome") in core.SETTLED:
+            # Settled while the neighbour checks ran (a decline or a log from
+            # another session): never overwrite it with "offered".
+            sess["answer"] = "settled"
+            print(f"\"{a.name}\" was settled while this ran ({prior['outcome']}), so it isn't offered. "
+                  "Nothing to show the builder.")
+            return
         sess["answer"] = "offered"
         sess["changes_at_answer"] = sess.get("changes", 0)
-        b = core.build(data, a.key)
         b["names"][a.name] = {"outcome": "offered", "at": core.now_iso(), "sentence": a.sentence,
                               "claim": claim or ""}
     report("guardrail_logit_offered", f"exploration log offered: {a.name}", a.name)
@@ -268,34 +276,43 @@ def cmd_settled(a):
     print("Recorded. Nothing to show the builder.")
 
 
-def _due_items(data, now):
-    """Claim the items whose turn it is, so a concurrent retry skips them. Each
-    stays in the durable queue until its delivery is acknowledged: a retry
-    killed mid-send loses nothing (a resend is harmless, the tracker finds the
+def _claim_next(data, now, skip):
+    """Claim the next item whose turn it is, so a concurrent retry skips it.
+    One at a time, right before its send: a lease taken for a whole batch could
+    expire before its turn came and let a second retry send it too. The item
+    stays in the durable queue until its delivery is acknowledged, so a retry
+    killed mid-send loses nothing (a resend is harmless: the tracker finds the
     row by name and credits it once)."""
-    claimed = []
     for item in data.get("pending", []):
         item.setdefault("id", uuid.uuid4().hex)
+        if item["id"] in skip:
+            continue
         nxt = core._parse(item.get("next_try", "")) or now
         busy = core._parse(item.get("inflight_until", ""))
         if nxt <= now and not (busy and busy > now):
             item["inflight_until"] = (now + core.timedelta(seconds=INFLIGHT_SECONDS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            claimed.append(dict(item))
-    return claimed
+            return dict(item)
+    return None
 
 
 def cmd_retry_pending(_a):
-    now = core.datetime.now(core.timezone.utc)
-    with core.locked() as data:
-        claimed = _due_items(data, now)
-    for item in claimed:
+    seen = set()
+    while True:
+        now = core.datetime.now(core.timezone.utc)
+        with core.locked() as data:
+            item = _claim_next(data, now, seen)
+        if item is None:
+            return
+        seen.add(item["id"])
         ok, res = send_registration(item.get("payload", {}))
         status = res.get("status") if isinstance(res, dict) else None
+        name = item.get("name", "")
         with core.locked() as data:
             queue = data.get("pending", [])
             current = next((q for q in queue if q.get("id") == item["id"]), None)
+            if current is None:
+                continue  # another retry already finished it
             b = core.build(data, item.get("key", ""))
-            name = item.get("name", "")
             if ok or status in PERMANENT_HTTP:
                 data["pending"] = [q for q in queue if q.get("id") != item["id"]]
             if ok:
@@ -307,7 +324,7 @@ def cmd_retry_pending(_a):
                 # be offered again, instead of leaving it "settled" with no row.
                 b["names"][name] = {"outcome": "offered", "at": core.now_iso(),
                                     "note": f"tracker refused the log: {res.get('error', status)}"}
-            elif current is not None:
+            else:
                 current["attempts"] = current.get("attempts", 1) + 1
                 hours = min(2 ** (current["attempts"] - 1), RETRY_MAX_HOURS)
                 current["next_try"] = (now + core.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")

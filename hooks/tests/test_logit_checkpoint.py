@@ -55,6 +55,10 @@ ENV = dict(os.environ, HOME=str(HOME), USERPROFILE=str(HOME), CLAUDE_CONFIG_DIR=
            GIT_CONFIG_GLOBAL=str(GITCFG), GIT_CONFIG_NOSYSTEM="1", NSLS_TRACKER_URL="http://127.0.0.1:9",
            PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
 STATE = HOME / ".claude" / ".nsls-logit-state.json"
+# The in-process checks below import log-it and guardrail_emit, which read these
+# at import and at call time: isolate this process as well as its children.
+for _k in ("HOME", "USERPROFILE", "CLAUDE_CONFIG_DIR", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "NSLS_TRACKER_URL"):
+    os.environ[_k] = ENV[_k]
 
 
 def make_repo(name, remote=None):
@@ -427,6 +431,38 @@ st = state()
 check("a refusal takes it off the queue", st["pending"] == [], repr(st["pending"]))
 check("and reopens the build so it can be offered again",
       st["builds"][key16]["names"]["Queue probe"]["outcome"] == "offered", repr(st["builds"][key16]))
+
+print("\na decline that lands while an offer is running is never overwritten")
+import argparse, contextlib, io  # noqa: E401,E402
+race_key = "git:github.com/someone/race"
+def decline_meanwhile(name, sentence):
+    with core.locked() as data:
+        core.build(data, race_key)["names"][name] = {"outcome": "declined", "at": core.now_iso(), "note": "raced"}
+    return []
+log_it.installed_neighbours = lambda name, sentence: []
+log_it.registry_neighbours = decline_meanwhile
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    log_it.cmd_offer(argparse.Namespace(session="race", key=race_key, name="Race build", sentence="Races"))
+check("the decline survives", state()["builds"][race_key]["names"]["Race build"]["outcome"] == "declined")
+check("and nothing is offered", "Want me to log" not in buf.getvalue(), buf.getvalue())
+
+print("\nretries take one item at a time, so a lease never outlives its send")
+data = state()
+data["pending"] = [{"id": f"r{i}", "payload": {"automation": {"name": f"R{i}"}, "builder_email": "x@nsls.org"},
+                    "key": race_key, "name": f"R{i}", "created": core.now_iso(), "attempts": 1,
+                    "next_try": "2000-01-01T00:00:00Z"} for i in range(3)]
+STATE.write_text(json.dumps(data), encoding="utf-8")
+leased_at_send = []
+def transient(payload):
+    leased_at_send.append(sum(1 for q in state()["pending"] if q.get("inflight_until")))
+    return False, {"error": "URLError"}
+log_it.send_registration = transient
+log_it.cmd_retry_pending(None)
+check("each send held exactly one lease", leased_at_send == [1, 1, 1], repr(leased_at_send))
+q = state()["pending"]
+check("all three stay queued for a later try, leases released",
+      len(q) == 3 and all(i["attempts"] == 2 and not i.get("inflight_until") for i in q), repr(q))
 
 print("\nthe labels it reports exist in the emitter, and hooks.json registers it")
 import guardrail_emit  # noqa: E402
