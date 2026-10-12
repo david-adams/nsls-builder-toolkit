@@ -241,12 +241,21 @@ def cmd_accept(a):
               "automatically at a later message. Tell the builder it's noted and the credit will land shortly.")
 
 
+def _declined(data, item):
+    return (data["builds"].get(item.get("key", ""), {}).get("names", {})
+            .get(item.get("name", ""), {}).get("outcome") == "declined")
+
+
 def cmd_decline(a):
     with core.locked() as data:
         sess = core.session(data, a.session)
         sess["answer"] = "declined"
         b = core.build(data, a.key)
         b["names"][a.name] = {"outcome": "declined", "at": core.now_iso(), "note": (a.note or "")[:200]}
+        # Their latest answer wins: a log queued from an earlier yes (the tracker
+        # was down) must not go out after they said no.
+        data["pending"] = [q for q in data.get("pending", [])
+                           if not (q.get("key") == a.key and q.get("name") == a.name)]
     detail = f" — {a.note}" if a.note else ""
     report("guardrail_logit_declined", f"exploration log declined: {a.name}{detail}", a.name)
     print(f"Recorded. \"{a.name}\" won't be offered again. Nothing more to say to the builder about it.")
@@ -300,6 +309,9 @@ def cmd_retry_pending(_a):
     while True:
         now = core.datetime.now(core.timezone.utc)
         with core.locked() as data:
+            # A build declined since it was queued is never sent (belt and
+            # braces: cmd_decline also removes it).
+            data["pending"] = [q for q in data.get("pending", []) if not _declined(data, q)]
             item = _claim_next(data, now, seen)
         if item is None:
             return
@@ -315,11 +327,16 @@ def cmd_retry_pending(_a):
             b = core.build(data, item.get("key", ""))
             if ok or status in PERMANENT_HTTP:
                 data["pending"] = [q for q in queue if q.get("id") != item["id"]]
-            if ok:
+            if ok and b["names"].get(name, {}).get("outcome") == "declined":
+                # Declined while this send was in flight: the row exists now and
+                # can't be unsent, but their answer stands locally and in the record.
+                b["names"][name]["note"] = (b["names"][name].get("note", "") + " (a queued log reached the "
+                                            "tracker as they declined)").strip()
+            elif ok:
                 entry = b["names"].get(name, {})
                 entry.update(outcome="logged", record_id=(res.get("automation") or {}).get("record_id", ""))
                 b["names"][name] = entry
-            elif status in PERMANENT_HTTP:
+            elif status in PERMANENT_HTTP and b["names"].get(name, {}).get("outcome") != "declined":
                 # Refused for good (no such builder, say): reopen the build so it can
                 # be offered again, instead of leaving it "settled" with no row.
                 b["names"][name] = {"outcome": "offered", "at": core.now_iso(),

@@ -464,6 +464,23 @@ q = state()["pending"]
 check("all three stay queued for a later try, leases released",
       len(q) == 3 and all(i["attempts"] == 2 and not i.get("inflight_until") for i in q), repr(q))
 
+print("\na no after a queued yes cancels the queued log")
+data = state()
+data["pending"] = []
+STATE.write_text(json.dumps(data), encoding="utf-8")
+repo17 = make_repo("changed-mind", "https://github.com/thensls/changed-mind.git")
+key17 = "git:github.com/thensls/changed-mind"
+helper("accept", "--session", "s17", "--key", key17, "--name", "Changed mind", "--sentence", "Was a yes",
+       cwd=repo17)
+check("the yes is queued (tracker down)", any(i["name"] == "Changed mind" for i in state()["pending"]))
+helper("decline", "--session", "s17", "--key", key17, "--name", "Changed mind", "--note", "actually, no")
+check("their no removes it from the queue", not any(i["name"] == "Changed mind" for i in state()["pending"]))
+sent = []
+log_it.send_registration = lambda payload: (sent.append(payload), (True, {"success": True}))[1]
+log_it.cmd_retry_pending(None)
+check("so nothing is sent for it", not any(p["automation"]["name"] == "Changed mind" for p in sent), repr(sent))
+check("and the no stands", state()["builds"][key17]["names"]["Changed mind"]["outcome"] == "declined")
+
 print("\nthe labels it reports exist in the emitter, and hooks.json registers it")
 import guardrail_emit  # noqa: E402
 for label in ("guardrail_logit_offered", "guardrail_logit_accepted", "guardrail_logit_declined"):
