@@ -58,6 +58,49 @@ print("\nan exact name match is reported, not suppressed")
 s = sc("macroscope", "anything at all", "macroscope", "Use when the review bot has posted comments")
 check(f"identical name scores {s} (>= threshold)", s >= m.THRESHOLD, True)
 
+print("\none common word shared by two names is not a twin")
+# 72 of 170 installed skills had a one-word name (2026-10-12), so any proposal
+# containing "log", "plan" or "review" scored 1.00 against the skill of that
+# name. The real case: "Guardrails log-it checkpoint" reported /log as a twin.
+DF = {"log": 5, "macroscope": 2, "plan": 20, "review": 25, "guardrail": 1, "checkpoint": 1}
+
+
+def scdf(qn, qd, cn, cd):
+    return round(m.score(m.tokens(qn), m.tokens(qn + " " + qd),
+                         m.tokens(cn), m.tokens(cn + " " + cd), DF), 2)
+
+
+LOG_IT = ("Guardrails log-it checkpoint",
+          "Makes Claude reliably offer to log a build as an exploration once it becomes real")
+LOG = ("log", "Log session progress to Obsidian project notes")
+s = scdf(*LOG_IT, *LOG)
+check(f"'log' in both names no longer makes /log a twin ({s})", s < m.THRESHOLD, True)
+s = scdf("macroscope-watch", "Waits for the Macroscope review bot to finish on a PR",
+         "macroscope", "Use when the Macroscope review bot has posted review comments on a pull request")
+check(f"a distinctive shared word still does ({s})", s >= m.THRESHOLD, True)
+s = scdf("log", "anything at all", *LOG)
+check(f"an identical name still scores, however common its word ({s})", s >= m.THRESHOLD, True)
+s = scdf("weekly plan review", "a weekly planning ritual", "plan review", "reviews a plan")
+check(f"two shared words still count, common or not ({s})", s >= m.THRESHOLD, True)
+check("without word counts the old reading stands", sc(*LOG_IT, *LOG) >= m.THRESHOLD, True)
+check("word counts span name and description, once per skill",
+      m.document_frequency({"log": ("log your log", "/a"), "plan": ("make a log", "/b")}),
+      {"log": 2, "plan": 1, "make": 1})
+
+print("\nend to end on this machine: the false twin is gone, the real neighbour stays")
+import contextlib, io
+def hits(name, desc):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m.main(["similar-skills.py", name, desc])
+    return [ln.split()[1] for ln in buf.getvalue().splitlines() if ln[:1].isdigit()]
+names_here = set(m.installed_skills())
+if "log" in names_here:
+    check("/log is not offered as a neighbour of the log-it checkpoint", "log" in hits(*LOG_IT), False)
+if "macroscope" in names_here:
+    check("macroscope is still offered as a neighbour of macroscope-watch",
+          "macroscope" in hits("macroscope-watch", "Waits for the Macroscope review bot to finish on a PR"), True)
+
 print("\ncached plugin versions sort newest-first, numerically not lexically")
 import pathlib
 def newer(a, b):

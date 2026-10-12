@@ -35,6 +35,13 @@ STOPWORDS = frozenset(
 )
 THRESHOLD = 0.5
 TOP_N = 3
+# A single shared word only makes two names alike when few installed skills use
+# it. 72 of 170 installed skills have a one-word name (2026-10-12), so without
+# this any proposal containing "plan", "review", "work", "setup" or "log"
+# scored a perfect 1.00 against the skill of that name: "Guardrails log-it
+# checkpoint" came back as a twin of /log, an Obsidian notes skill. A check
+# that cries wolf on every build teaches people to skip the real hits.
+DISTINCTIVE_DF = 3
 
 
 def tokens(text):
@@ -124,7 +131,7 @@ def installed_skills():
     return found
 
 
-def score(query_name, query_all, cand_name, cand_all):
+def score(query_name, query_all, cand_name, cand_all, df=None):
     """Best of two readings, because a skill's name carries more signal than its
     description.
 
@@ -136,9 +143,27 @@ def score(query_name, query_all, cand_name, cand_all):
     distinctive, so overlap between them is the sharper instrument. Take
     whichever reading is more suspicious and let the human judge; the contract
     here is to mention a neighbour, never to block one.
+
+    `df` (how many installed skills use each word) keeps the name reading
+    honest: when the names share exactly one word, it only counts if that word
+    is distinctive (DISTINCTIVE_DF). Identical names always count, and two or
+    more shared words always count. Without `df` the old reading stands.
     """
-    return max(similarity(query_all, cand_all),
-               similarity(query_name, cand_name))
+    full = similarity(query_all, cand_all)
+    shared = query_name & cand_name
+    if (df is not None and query_name != cand_name and len(shared) == 1
+            and df.get(next(iter(shared)), 0) > DISTINCTIVE_DF):
+        return full
+    return max(full, similarity(query_name, cand_name))
+
+
+def document_frequency(skills):
+    """How many installed skills use each word, across name and description."""
+    df = {}
+    for name, (desc, _where) in skills.items():
+        for tok in tokens(name + " " + desc):
+            df[tok] = df.get(tok, 0) + 1
+    return df
 
 
 def main(argv):
@@ -148,14 +173,16 @@ def main(argv):
     q_name = tokens(argv[1])
     q_all = tokens(argv[1] + " " + (argv[2] if len(argv) > 2 else ""))
     hits = []
-    for name, (desc, where) in installed_skills().items():
+    skills = installed_skills()
+    df = document_frequency(skills)
+    for name, (desc, where) in skills.items():
         # No self-skip. An earlier version suppressed an exact name match as
         # "not its own neighbour", which got the purpose backwards: this runs
         # BEFORE a build, so a skill already installed under the proposed name
         # is not noise, it is the loudest possible answer to the question being
         # asked. Re-running the check on something already logged reports it at
         # 1.00, which is correct and reads as such.
-        s = score(q_name, q_all, tokens(name), tokens(name + " " + desc))
+        s = score(q_name, q_all, tokens(name), tokens(name + " " + desc), df)
         if s >= THRESHOLD:
             hits.append((s, name, desc, where))
     hits.sort(key=lambda h: (-h[0], h[1]))
