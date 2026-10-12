@@ -21,7 +21,11 @@ Deliberately LOCAL rather than a tracker lookup:
 
 Keyed by git remote slug where there is one, so the memory survives a re-clone
 and follows the build rather than the directory. Falls back to the absolute path
-for repos with no remote.
+for repos with no remote, and to the folder for work outside git (a doc, a
+dashboard, a script in ~/Documents): that used to have no key at all, so the
+no was neither remembered nor reported and the builder was asked again every
+session. A folder can hold several builds, so its listing says so and leaves
+Claude to judge which build each decline was about.
 
 Also holds the builder's declared Airtable sandbox bases, for the same reason:
 the bulk-write gate cannot tell a test base from the real one (same host, only
@@ -61,6 +65,7 @@ def _config_dir():
 
 
 STORE = _config_dir() / ".nsls-guardrail-declines.json"
+FOLDER_PREFIX = "dir:"
 
 # Keep the file from growing without bound on a long-lived machine. Well above
 # any realistic number of distinct builds one person has on the go.
@@ -85,7 +90,10 @@ def build_key(cwd):
     """
     root = git(["rev-parse", "--show-toplevel"], cwd)
     if not root:
-        return None
+        try:
+            return FOLDER_PREFIX + Path(cwd or os.getcwd()).resolve().as_posix()
+        except Exception:
+            return None
     remote = git(["remote", "get-url", "origin"], root)
     # Host included: a slug-only key made acme/service on two different hosts
     # the same build, so one repo's decline silenced the other's guardrails.
@@ -213,6 +221,13 @@ def describe(cwd):
     for topic, v in sorted(entry.items()):
         note = f" — {v['note']}" if v.get("note") else ""
         lines.append(f"- {topic} (declined {v.get('at', 'previously')}){note}")
+    if key.startswith(FOLDER_PREFIX):
+        return (
+            "In this folder (not a git repo, so it may hold several builds) these were "
+            "declined. Each is closed for the build its note describes; do NOT raise it "
+            "again for that build unless the scope genuinely escalated since:\n"
+            + "\n".join(lines)
+        )
     return (
         "This build has already declined the following. Do NOT raise them again "
         "unless the scope genuinely escalated since:\n" + "\n".join(lines)
