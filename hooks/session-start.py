@@ -2574,10 +2574,13 @@ def emit_guardrails_context():
     # the half of this that governs *tone* -- silently never loads. Same failure
     # as the section itself not loading, one level down. Resolve it against
     # PLUGIN_DIR so the path is openable from wherever the builder is working.
-    voice_guide = guardrail_root / "_shared" / "references" / "guardrail-voice.md"
-    section = section.replace(
-        "`_shared/references/guardrail-voice.md`", f"`{voice_guide}`"
-    )
+    # Forward slashes on every OS: Claude runs these through Git Bash on a PC,
+    # where C:/Users/... is a path and a backslash is an escape character.
+    for ref in ("guardrail-voice.md", "guardrail-playbook.md"):
+        section = section.replace(
+            f"`_shared/references/{ref}`",
+            f"`{(guardrail_root / '_shared' / 'references' / ref).as_posix()}`",
+        )
 
     # Same class of bug, one variable along. CLAUDE.md writes the decline- and
     # event-recording commands as "${CLAUDE_PLUGIN_ROOT}/hooks/...", which is
@@ -2588,7 +2591,10 @@ def emit_guardrails_context():
     # missing file. Nothing surfaces: the decline is simply never recorded, and
     # rule 6 ("take the first no gracefully, and remember it") quietly becomes
     # unenforceable -- the nagware failure the block below is meant to prevent.
-    section = section.replace("${CLAUDE_PLUGIN_ROOT}", str(guardrail_root))
+    # The commands go through run-hook.sh, never a bare `python3`: stock Windows
+    # has no python3 (a Store alias that exits without running), and the
+    # launcher already resolves the interpreter the hooks themselves run on.
+    section = section.replace("${CLAUDE_PLUGIN_ROOT}", guardrail_root.as_posix())
 
     print(
         "[NSLS Builder Toolkit — org guardrail policy, active this session]\n\n"
@@ -2663,6 +2669,22 @@ def _utf8_stdio():
             pass
 
 
+def _policy_hook_owns_policy():
+    """True when the plugin's own `policy` hook prints the guardrail policy.
+
+    Claude Code caps each hook's output at 10,000 characters and hands Claude
+    only the first 2,000 of anything longer. Printed from here, the policy
+    shared that budget with every notice and announcement this hook makes, and
+    once the section passed the cap (2026-09-20) Claude saw the tier table and
+    the hard-gate list and nothing else -- not the decline or event commands,
+    not "log it". The plugin now runs the policy as its own SessionStart hook
+    (guardrail-policy.py), with its own budget, on startup, resume, clear and
+    compact. CLAUDE_PLUGIN_ROOT is set only for plugin hooks; a clone or shim
+    run has no policy hook, so it keeps printing the policy itself.
+    """
+    return bool(os.environ.get("CLAUDE_PLUGIN_ROOT"))
+
+
 def main():
     _utf8_stdio()
     git_pull()
@@ -2671,7 +2693,8 @@ def main():
         ensure_plugin_fresh()
     sync_pointers()
     notice_own_skills()
-    emit_guardrails_context()
+    if not _policy_hook_owns_policy():
+        emit_guardrails_context()
     replayed = replay_failed_ping()
     session_ping(replayed=replayed)
     bootstrap_collector()
@@ -2735,6 +2758,17 @@ if __name__ == "__guardrails__":
     try:
         if not stage_a:  # stage A spent this session's freshness budget
             ensure_plugin_fresh()
+    except Exception:
+        pass
+
+# Entry point for the plugin's `policy` hook (guardrail-policy.py): the
+# guardrail policy and nothing else. It runs on startup, resume, clear and
+# compact, so it must never pull, ping or migrate -- two credit pings racing
+# per session is how the duplicate credit rows of September 2026 were made.
+if __name__ == "__policy__":
+    _utf8_stdio()
+    try:
+        emit_guardrails_context()
     except Exception:
         pass
 

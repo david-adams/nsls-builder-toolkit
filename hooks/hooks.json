@@ -12,6 +12,18 @@
             "shell": "bash"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh\" policy",
+            "timeout": 15,
+            "statusMessage": "Loading builder guardrails…",
+            "shell": "bash"
+          }
+        ]
       }
     ],
     "PreToolUse": [
