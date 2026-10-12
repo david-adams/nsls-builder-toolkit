@@ -331,7 +331,7 @@ check("a live match is an offer to coordinate, never a wall",
       any("we-might-overlap note" in l and "Your call" in l for l in lines))
 
 print("\nexact names and keys survive the copy, whatever they contain")
-odd = TMP / "proj $HOME `x` \"q\""
+odd = TMP / "proj $HOME `x` 'q'"   # all legal in a Windows file name, unlike a double quote
 odd.mkdir()
 tp13 = TMP / "s13.jsonl"
 transcript(tp13, prompts=3, changes=6)
