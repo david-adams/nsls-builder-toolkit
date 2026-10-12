@@ -321,8 +321,17 @@ def launcher():
     return (Path(__file__).resolve().parent / "run-hook.sh").as_posix()
 
 
+# Characters a shell would act on inside double quotes, in Git Bash or
+# PowerShell: $ and ` expand or substitute, " ends the string, \ escapes, and a
+# newline ends the command. Values printed into a command Claude will copy come
+# partly from the tracker (a parked idea's name, from /similar), which anyone
+# can write to, so a name like x$(curl ...) must reach the shell as text.
+_UNSAFE = str.maketrans({c: " " for c in '$`"\\\r\n\t'})
+
+
 def _q(value):
-    return '"' + str(value).replace("\\", "/").replace('"', "'") + '"'
+    """Double-quote a value for a command Claude copies, inert in any shell."""
+    return '"' + " ".join(str(value).translate(_UNSAFE).split()) + '"'
 
 
 def command(sub, sid, key, *rest):
