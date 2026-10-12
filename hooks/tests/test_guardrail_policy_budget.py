@@ -140,6 +140,17 @@ with tempfile.TemporaryDirectory() as tmp:
         else:
             os.environ["CLAUDE_PLUGIN_ROOT"] = saved
 
+    src = (HOOKS / "session-start.py").read_text(encoding="utf-8")
+    main_src = src[src.index("\ndef main():"):src.index('\nif __name__ == "__guardrails__":')]
+    check("main() prints the policy only behind that check",
+          "if not _policy_hook_owns_policy():\n        emit_guardrails_context()" in main_src
+          and main_src.count("emit_guardrails_context()") == 1)
+    policy_block = src[src.index('if __name__ == "__policy__":'):src.index('if __name__ == "__main__":')]
+    busy = [f for f in ("git_pull", "session_ping", "replay_failed_ping", "run_plugin_migration",
+                        "ensure_plugin_fresh", "sync_pointers", "bootstrap_collector", "_record_beacon")
+            if f + "(" in policy_block]
+    check("the policy-only entry pulls, pings and migrates nothing", not busy, f"({busy})")
+
     print("\nhooks.json: the policy returns after clear and compact; the credit ping does not")
     starts = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]["SessionStart"]
 
