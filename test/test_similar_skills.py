@@ -84,7 +84,10 @@ s = scdf("weekly plan review", "a weekly planning ritual", "plan review", "revie
 check(f"two shared words still count, common or not ({s})", s >= m.THRESHOLD, True)
 check("without word counts the old reading stands", sc(*LOG_IT, *LOG) >= m.THRESHOLD, True)
 def one_shared(word, count):
-    return m.score({word, "alpha"}, {word, "alpha"}, {word}, {word, "beta"}, {word: count} if count else {})
+    # Full text shares only `word` out of four on each side (0.25), so the
+    # result is decided by whether the one-word name reading is allowed to count.
+    return m.score({word, "alpha"}, {word, "alpha", "delta", "omega"},
+                   {word}, {word, "beta", "zeta", "theta"}, {word: count} if count else {})
 check("the cutoff is inclusive: a word 3 skills use still counts",
       one_shared("gamma", m.DISTINCTIVE_DF) >= m.THRESHOLD, True)
 check("and a word 4 skills use does not", one_shared("gamma", m.DISTINCTIVE_DF + 1) < m.THRESHOLD, True)
