@@ -125,10 +125,10 @@ def cmd_offer(a):
     with core.locked() as data:
         b = core.build(data, a.key)
         prior = b["names"].get(a.name, {})
-        if prior.get("outcome") in ("declined", "logged", "logged-pending"):
+        if prior.get("outcome") in core.SETTLED:
             sess = core.session(data, a.session)
             sess["answer"] = "settled"
-            print(f"\"{a.name}\" was already {prior['outcome'].replace('-pending', '')} on "
+            print(f"\"{a.name}\" was already {prior['outcome'].replace('-pending', '').replace('settled', 'settled here')} on "
                   f"{prior.get('at', '')[:10]}, so it isn't offered again. Nothing to show the builder.")
             return
     skills = installed_neighbours(a.name, a.sentence)

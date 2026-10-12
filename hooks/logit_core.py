@@ -46,6 +46,9 @@ NOT_YET_LIMIT = 3        # per build in NOT_YET_WINDOW_DAYS; after that, stop as
 NOT_YET_WINDOW_DAYS = 30
 FOLDER_QUIET_DAYS = 1      # a folder is quiet this long after a not-yet there
 MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
+# Read at most this much new transcript per prompt; a resumed session with a
+# huge transcript catches up over a few messages instead of stalling one.
+SCAN_BUDGET_BYTES = 4 * 1024 * 1024
 SESSION_TTL_DAYS = 14
 MAX_BUILDS = 300
 
@@ -82,13 +85,24 @@ def _parse(iso):
 # ── state ───────────────────────────────────────────────────────────────────
 
 def load():
+    p = state_path()
     try:
-        data = json.loads(state_path().read_text(encoding="utf-8"))
+        raw = p.read_text(encoding="utf-8")
+    except Exception:
+        return {"sessions": {}, "builds": {}, "pending": []}
+    try:
+        data = json.loads(raw)
         if isinstance(data, dict):
             data.setdefault("sessions", {})
             data.setdefault("builds", {})
             data.setdefault("pending", [])
             return data
+    except Exception:
+        pass
+    # Unreadable: keep it for diagnosis rather than silently overwriting the
+    # declines and queued logs it may still hold.
+    try:
+        p.replace(p.with_name(p.name + f".corrupt-{int(time.time())}"))
     except Exception:
         pass
     return {"sessions": {}, "builds": {}, "pending": []}
@@ -121,17 +135,46 @@ def _prune(data):
 
 
 class locked:
-    """Advisory lock around load-modify-save. Falls open (no fcntl on Windows):
-    a lost update re-asks a question once, the cheaper wrong."""
+    """Exclusive lock around load-modify-save, on every OS.
+
+    flock where it exists; elsewhere (Windows) a lock file created with
+    O_CREAT|O_EXCL, which is atomic everywhere, taken over when stale. If the
+    lock cannot be had within LOCK_WAIT it falls open: a lost update re-asks a
+    question once, the cheaper wrong than a hook that hangs.
+    """
+    LOCK_WAIT = 3.0
+    STALE = 15.0
 
     def __enter__(self):
         self.fh = None
+        self.excl = None
+        lock = state_path().with_suffix(".lock")
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         try:
             import fcntl
-            p = state_path().with_suffix(".lock")
-            p.parent.mkdir(parents=True, exist_ok=True)
-            self.fh = open(p, "w")
+            self.fh = open(lock, "w")
             fcntl.flock(self.fh, fcntl.LOCK_EX)
+        except ImportError:
+            deadline = time.monotonic() + self.LOCK_WAIT
+            excl = lock.with_suffix(".lockx")
+            while time.monotonic() < deadline:
+                try:
+                    os.close(os.open(str(excl), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                    self.excl = excl
+                    break
+                except FileExistsError:
+                    try:
+                        if time.time() - excl.stat().st_mtime > self.STALE:
+                            excl.unlink()
+                            continue
+                    except Exception:
+                        pass
+                    time.sleep(0.05)
+                except Exception:
+                    break
         except Exception:
             pass
         self.data = load()
@@ -139,11 +182,12 @@ class locked:
 
     def __exit__(self, *exc):
         save(self.data)
-        try:
-            if self.fh:
-                self.fh.close()
-        except Exception:
-            pass
+        for release in (lambda: self.fh and self.fh.close(),
+                        lambda: self.excl and self.excl.unlink()):
+            try:
+                release()
+            except Exception:
+                pass
         return False
 
 
@@ -245,7 +289,7 @@ def scan(sess, transcript_path):
     try:
         with open(p, "rb") as fh:
             fh.seek(sess.get("offset", 0))
-            chunk = fh.read()
+            chunk = fh.read(SCAN_BUDGET_BYTES)
     except Exception:
         return
     end = chunk.rfind(b"\n")
