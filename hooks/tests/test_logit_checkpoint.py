@@ -300,19 +300,26 @@ sys.path.insert(0, sys.argv[1])
 import logit_core as core
 core.locked.LOCK_WAIT = 0.4
 held = core.locked(); held.__enter__()
-t0 = time.monotonic(); other = core.locked(); other.__enter__(); waited = time.monotonic() - t0
-other.__exit__(None, None, None); held.__exit__(None, None, None)
+t0 = time.monotonic()
+try:
+    other = core.locked(); other.__enter__(); got = "entered"; other.__exit__(None, None, None)
+except core.Busy:
+    got = "busy"
+waited = time.monotonic() - t0
+held.__exit__(None, None, None)
 t1 = time.monotonic(); again = core.locked(); again.__enter__(); fast = time.monotonic() - t1
 again.__exit__(None, None, None)
-print(f"{waited:.2f} {fast:.2f}")
+print(f"{waited:.2f} {fast:.2f} {got}")
 """
 r = subprocess.run([sys.executable, "-c", probe, str(HOOKS)], capture_output=True, text=True, encoding="utf-8",
                    errors="replace", env=ENV, timeout=60)
 try:
-    waited, fast = (float(x) for x in r.stdout.split())
+    waited, fast, got = r.stdout.split()
+    waited, fast = float(waited), float(fast)
 except Exception:
-    waited, fast = 0.0, 9.9
+    waited, fast, got = 0.0, 9.9, ""
 check("a second taker waits for the first", waited >= 0.35, f"({r.stdout!r} {r.stderr[-200:]!r})")
+check("then gives up without writing, never without the lock", got == "busy", repr(got))
 check("and the lock is free again once released", fast < 0.3, f"({fast})")
 
 print("\nnames from the tracker can't run as commands when Claude copies a line")
@@ -389,6 +396,8 @@ if not WINDOWS:
     waited = time.monotonic() - t0
     holder.kill()
     check(f"a held flock is given up after the wait ({waited:.1f}s)", waited < 7 and r.returncode == 0)
+    check("and the hook neither asks nor writes without the lock",
+          r.stdout.strip() == "" and "s15" not in state()["sessions"], repr(r.stdout[:200]))
 
 print("\nqueued logs are kept until the tracker takes them, and reopened if it refuses")
 import http.server, threading  # noqa: E401,E402
@@ -480,6 +489,106 @@ log_it.send_registration = lambda payload: (sent.append(payload), (True, {"succe
 log_it.cmd_retry_pending(None)
 check("so nothing is sent for it", not any(p["automation"]["name"] == "Changed mind" for p in sent), repr(sent))
 check("and the no stands", state()["builds"][key17]["names"]["Changed mind"]["outcome"] == "declined")
+
+
+def accept(key, name, sender):
+    log_it.send_registration = sender
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        log_it.cmd_accept(argparse.Namespace(session="s18", key=key, name=name, sentence="Does a thing", claim="",
+                                             email="test.builder@nsls.org"))
+    return buf.getvalue()
+
+
+def queue_item(key, name, item_id):
+    return {"id": item_id, "payload": {"automation": {"name": name}, "builder_email": "x@nsls.org"}, "key": key,
+            "name": name, "created": core.now_iso(), "attempts": 1, "next_try": "2000-01-01T00:00:00Z"}
+
+
+print("\na stale queued log can't undo a later yes that went through")
+key18 = "git:github.com/thensls/second-try"
+data = state()
+data["pending"] = [queue_item(key18, "Second try", "stale")]
+data["builds"][key18] = {"names": {"Second try": {"outcome": "logged-pending", "at": core.now_iso()}},
+                         "work_sessions": 0, "not_yet": []}
+STATE.write_text(json.dumps(data), encoding="utf-8")
+accept(key18, "Second try", lambda payload: (True, {"success": True, "automation": {"record_id": "recNEW"}}))
+st = state()
+check("the yes that went through replaces the queued copy",
+      not any(q["name"] == "Second try" for q in st["pending"])
+      and st["builds"][key18]["names"]["Second try"]["outcome"] == "logged", repr(st["pending"]))
+st["pending"] = [queue_item(key18, "Second try", "stale2")]
+STATE.write_text(json.dumps(st), encoding="utf-8")
+log_it.send_registration = lambda payload: (False, {"error": "HTTP 404", "status": 404})
+log_it.cmd_retry_pending(None)
+st = state()
+check("and a refusal of a stale copy leaves the log standing",
+      st["builds"][key18]["names"]["Second try"]["outcome"] == "logged" and st["pending"] == [],
+      repr(st["builds"][key18]))
+
+print("\na no given while a yes is still sending stands, and the failed yes isn't queued")
+key19 = "git:github.com/thensls/withdrawn"
+
+
+def no_while_sending(ok):
+    def sender(payload):
+        with core.locked() as d:
+            core.build(d, key19)["names"]["Withdrawn"] = {"outcome": "declined", "at": core.now_iso(),
+                                                          "note": "changed my mind"}
+        return (True, {"success": True}) if ok else (False, {"error": "URLError"})
+    return sender
+
+
+out = accept(key19, "Withdrawn", no_while_sending(ok=False))
+st = state()
+check("the no stands", st["builds"][key19]["names"]["Withdrawn"]["outcome"] == "declined", repr(st["builds"][key19]))
+check("nothing is queued to publish it", not any(q["name"] == "Withdrawn" for q in st["pending"]), repr(st["pending"]))
+check("and Claude is told the no stands", "their no stands" in out and "queued and goes out" not in out, out)
+out = accept(key19, "Withdrawn", no_while_sending(ok=True))
+check("a send that landed as they declined still leaves the no standing",
+      state()["builds"][key19]["names"]["Withdrawn"]["outcome"] == "declined" and "Logged" not in out, out)
+
+print("\nan answer that couldn't be saved is never reported as recorded or queued")
+real_save = core.save
+core.save = lambda d: False
+try:
+    out = accept("git:github.com/thensls/unsaved", "Unsaved", lambda payload: (False, {"error": "URLError"}))
+    check("a failed log isn't called queued", "NOT logged" in out and "queued and goes out" not in out, out)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        log_it.cmd_decline(argparse.Namespace(session="s19", key=key19, name="Unsaved no", note=""))
+    check("a decline that didn't save says to run it again", "Run the same decline again" in buf.getvalue(),
+          buf.getvalue())
+finally:
+    core.save = real_save
+check("and nothing was written", "git:github.com/thensls/unsaved" not in state()["builds"])
+
+print("\nwhile another session holds the state, an answer is refused, not half-written")
+holder = core.locked()
+holder.__enter__()
+try:
+    r = helper("decline", "--session", "s20", "--key", key19, "--name", "Held", "--note", "no")
+finally:
+    holder.__exit__(None, None, None)
+check("Claude is told to run it again", "Not recorded" in r.stdout, repr(r.stdout + r.stderr[-200:]))
+check("and nothing was written", "Held" not in state()["builds"][key19]["names"])
+
+print("\npruning keeps every answered build, dropping activity-only ones first")
+saved_caps = core.MAX_BUILDS, core.MAX_ANSWERED_BUILDS
+core.MAX_BUILDS, core.MAX_ANSWERED_BUILDS = 5, 3
+d = {"sessions": {}, "pending": [], "builds": {}}
+for i in range(8):   # activity only, newest last
+    d["builds"][f"dir:/a{i}"] = {"names": {}, "touched": f"2026-01-{10 + i:02d}T00:00:00Z"}
+for i in range(4):   # answered, and older than all of them
+    d["builds"][f"git:x/answered{i}"] = {"touched": f"2025-01-{10 + i:02d}T00:00:00Z", "names": {
+        "N": {"outcome": "declined", "at": f"2025-01-{10 + i:02d}T00:00:00Z"}}}
+core._prune(d)
+core.MAX_BUILDS, core.MAX_ANSWERED_BUILDS = saved_caps
+check("activity-only builds are cut to their cap, oldest first",
+      sorted(k for k in d["builds"] if k.startswith("dir:")) == [f"dir:/a{i}" for i in range(3, 8)], repr(d["builds"]))
+check("answered builds outlive them, cut only past their own cap",
+      sorted(k for k in d["builds"] if k.startswith("git:")) == [f"git:x/answered{i}" for i in (1, 2, 3)],
+      repr(sorted(d["builds"])))
 
 print("\nonly a remote slug becomes a repo link; a local repo or folder has none")
 norem = make_repo("no-remote")

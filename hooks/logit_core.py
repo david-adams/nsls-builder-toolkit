@@ -51,7 +51,8 @@ MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
 # huge transcript catches up over a few messages instead of stalling one.
 SCAN_BUDGET_BYTES = 4 * 1024 * 1024
 SESSION_TTL_DAYS = 14
-MAX_BUILDS = 300
+MAX_BUILDS = 300            # builds that only saw activity
+MAX_ANSWERED_BUILDS = 3000  # builds holding a decline, a log or "settled" outlive them
 
 CHANGE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell"})
 # Connector tools that change something. Matched on the tool's own name (the
@@ -110,6 +111,8 @@ def load():
 
 
 def save(data):
+    """True once the state is on disk. Anything that tells the builder an answer
+    was recorded or a log queued checks this first."""
     try:
         _prune(data)
         p = state_path()
@@ -117,8 +120,9 @@ def save(data):
         tmp = p.with_suffix(f".tmp{os.getpid()}")
         tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
         tmp.replace(p)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _prune(data):
@@ -126,13 +130,26 @@ def _prune(data):
     for sid in [s for s, v in data["sessions"].items()
                 if (_parse(v.get("updated", "")) or cutoff) < cutoff]:
         data["sessions"].pop(sid, None)
-    if len(data["builds"]) > MAX_BUILDS:
-        def newest(k):
-            b = data["builds"][k]
-            stamps = [n.get("at", "") for n in b.get("names", {}).values()] + [b.get("touched", "")]
-            return max(stamps or [""])
-        for stale in sorted(data["builds"], key=newest)[: len(data["builds"]) - MAX_BUILDS]:
+
+    def newest(k):
+        b = data["builds"][k]
+        stamps = [n.get("at", "") for n in b.get("names", {}).values()] + [b.get("touched", "")]
+        return max(stamps or [""])
+
+    def answered(k):
+        return any(n.get("outcome") in SETTLED for n in data["builds"][k].get("names", {}).values())
+
+    # A build holding an answer is a promise not to ask again, so builds that
+    # only saw activity go first, and answered ones only past a far larger cap.
+    for group, cap in ((False, MAX_BUILDS), (True, MAX_ANSWERED_BUILDS)):
+        keys = sorted((k for k in data["builds"] if answered(k) == group), key=newest)
+        for stale in keys[: max(0, len(keys) - cap)]:
             data["builds"].pop(stale, None)
+
+
+class Busy(Exception):
+    """The state lock couldn't be had in time: another session holds it, or the
+    folder isn't writable."""
 
 
 class locked:
@@ -140,15 +157,21 @@ class locked:
 
     flock where it exists; elsewhere (Windows) a lock file created with
     O_CREAT|O_EXCL, which is atomic everywhere, taken over when stale. If the
-    lock cannot be had within LOCK_WAIT it falls open: a lost update re-asks a
-    question once, the cheaper wrong than a hook that hangs.
+    lock cannot be had within LOCK_WAIT it raises Busy rather than hold up the
+    prompt, and nothing is written: saving without the lock could overwrite
+    another session's decline or queued log. A transaction that raises isn't
+    saved either. `saved` says whether this one reached disk.
     """
     LOCK_WAIT = 3.0
     STALE = 15.0
 
-    def __enter__(self):
+    def __init__(self):
         self.fh = None
         self.excl = None
+        self.saved = False
+
+    def __enter__(self):
+        held = False
         lock = state_path().with_suffix(".lock")
         try:
             lock.parent.mkdir(parents=True, exist_ok=True)
@@ -161,11 +184,10 @@ class locked:
             while True:
                 try:
                     fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held = True
                     break
                 except OSError:
                     if time.monotonic() >= deadline:
-                        self.fh.close()
-                        self.fh = None  # fall open rather than hold up the prompt
                         break
                     time.sleep(0.05)
         except ImportError:
@@ -175,6 +197,7 @@ class locked:
                 try:
                     os.close(os.open(str(excl), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
                     self.excl = excl
+                    held = True
                     break
                 except FileExistsError:
                     try:
@@ -188,18 +211,36 @@ class locked:
                     break
         except Exception:
             pass
-        self.data = load()
+        if not held:
+            self._release()
+            raise Busy()
+        try:
+            self.data = load()
+        except BaseException:
+            self._release()
+            raise
         return self.data
 
-    def __exit__(self, *exc):
-        save(self.data)
+    def __exit__(self, exc_type, *exc):
+        try:
+            if exc_type is None:
+                self.saved = save(self.data)
+                if not self.saved:
+                    # Often a moment's clash, such as a reader holding the file on Windows.
+                    time.sleep(0.2)
+                    self.saved = save(self.data)
+        finally:
+            self._release()
+        return False
+
+    def _release(self):
         for release in (lambda: self.fh and self.fh.close(),
                         lambda: self.excl and self.excl.unlink()):
             try:
                 release()
             except Exception:
                 pass
-        return False
+        self.fh = self.excl = None
 
 
 def session(data, sid):

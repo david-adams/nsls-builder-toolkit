@@ -51,6 +51,8 @@ except Exception:  # reporting is never worth failing the answer over
 RETRY_MAX_HOURS = 24
 INFLIGHT_SECONDS = 120
 PERMANENT_HTTP = (400, 404, 409, 422)  # the tracker refused this payload; retrying won't help
+NOT_SAVED = ("Not recorded: this machine couldn't save the exploration-log state. Run the same command again "
+             "in a moment. Nothing to show the builder meanwhile.")
 
 
 def tracker_url():
@@ -140,7 +142,8 @@ def cmd_offer(a):
     skills = installed_neighbours(a.name, a.sentence)
     registry = registry_neighbours(a.name, a.sentence)
     lines, claim = offer_text(a.name, a.sentence, skills, registry)
-    with core.locked() as data:
+    tx = core.locked()
+    with tx as data:
         sess = core.session(data, a.session)
         b = core.build(data, a.key)
         prior = b["names"].get(a.name, {})
@@ -155,6 +158,10 @@ def cmd_offer(a):
         sess["changes_at_answer"] = sess.get("changes", 0)
         b["names"][a.name] = {"outcome": "offered", "at": core.now_iso(), "sentence": a.sentence,
                               "claim": claim or ""}
+    if not tx.saved:
+        # Unrecorded, the Stop hook would go on reminding about an offer already made.
+        print(NOT_SAVED)
+        return
     report("guardrail_logit_offered", f"exploration log offered: {a.name}", a.name)
     # Exact values travel encoded, so the answer records the very name and the
     # claim finds its row (a parked idea's name comes from the tracker).
@@ -222,26 +229,56 @@ def cmd_accept(a):
               "logged yet. Ask for their NSLS email and run this again with --email.")
         return
     payload = register_payload(target, a.sentence, a.key, email)
+    started = core.now_iso()
     ok, res = send_registration(payload)
-    with core.locked() as data:
-        sess = core.session(data, a.session)
-        sess["answer"] = "accepted"
-        b = core.build(data, a.key)
-        entry = {"outcome": "logged" if ok else "logged-pending", "at": core.now_iso(), "sentence": a.sentence}
-        if ok:
-            entry["record_id"] = (res.get("automation") or {}).get("record_id", "")
-        else:
-            data["pending"].append({"id": uuid.uuid4().hex, "payload": payload, "key": a.key, "name": a.name,
-                                    "created": core.now_iso(), "attempts": 1, "next_try": core.now_iso()})
-        b["names"][a.name] = entry
+    withdrawn = False
+    tx = core.locked()
+    try:
+        with tx as data:
+            b = core.build(data, a.key)
+            prior = b["names"].get(a.name, {})
+            # Their latest answer wins. A no given while this was sending stands,
+            # and a send that failed is then not queued: it would publish what they
+            # withdrew.
+            withdrawn = prior.get("outcome") == "declined" and prior.get("at", "") >= started
+            # An earlier queued copy of this log goes either way: left behind, a
+            # later refusal of it would reopen a build this answer settled.
+            data["pending"] = [q for q in data.get("pending", [])
+                               if not (q.get("key") == a.key and q.get("name") == a.name)]
+            if withdrawn:
+                if ok:
+                    prior["note"] = (prior.get("note", "") + " (a log reached the tracker as they declined)").strip()
+            else:
+                core.session(data, a.session)["answer"] = "accepted"
+                entry = {"outcome": "logged" if ok else "logged-pending", "at": core.now_iso(),
+                         "sentence": a.sentence}
+                if ok:
+                    entry["record_id"] = (res.get("automation") or {}).get("record_id", "")
+                else:
+                    data["pending"].append({"id": uuid.uuid4().hex, "payload": payload, "key": a.key,
+                                            "name": a.name, "created": core.now_iso(), "attempts": 1,
+                                            "next_try": core.now_iso()})
+                b["names"][a.name] = entry
+    except core.Busy:
+        pass  # tx.saved stays False, and the messages below say so
+    if withdrawn:
+        print(f"They declined \"{a.name}\" while this was sending, so their no stands"
+              + (" (the tracker had already taken the log)." if ok else ", and nothing is queued.")
+              + " Nothing more to say to the builder about it.")
+        return
     if ok:
         logged(a.name, res)
         claimed = " (claiming the parked idea row)" if a.claim else ""
         print(f"Logged \"{target}\" at Exploring{claimed}: builder credit recorded, and the row is theirs. "
               "Close in one warm line.")
-    else:
+        if not tx.saved:
+            print(f"(This machine couldn't note it locally, so \"{a.name}\" may be offered once more.)")
+    elif tx.saved:
         print(f"The tracker didn't take it ({res.get('error', 'no answer')}), so it's queued and goes out "
               "automatically at a later message. Tell the builder it's noted and the credit will land shortly.")
+    else:
+        print(f"The tracker didn't take it ({res.get('error', 'no answer')}), and this machine couldn't queue it, "
+              "so it is NOT logged yet. Tell the builder it didn't go through, and offer to try again later.")
 
 
 def _declined(data, item):
@@ -250,7 +287,8 @@ def _declined(data, item):
 
 
 def cmd_decline(a):
-    with core.locked() as data:
+    tx = core.locked()
+    with tx as data:
         sess = core.session(data, a.session)
         sess["answer"] = "declined"
         b = core.build(data, a.key)
@@ -261,31 +299,38 @@ def cmd_decline(a):
                            if not (q.get("key") == a.key and q.get("name") == a.name)]
     detail = f" — {a.note}" if a.note else ""
     report("guardrail_logit_declined", f"exploration log declined: {a.name}{detail}", a.name)
-    print(f"Recorded. \"{a.name}\" won't be offered again. Nothing more to say to the builder about it.")
+    if tx.saved:
+        print(f"Recorded. \"{a.name}\" won't be offered again. Nothing more to say to the builder about it.")
+    else:
+        # Unsaved, a log queued from an earlier yes would also still go out.
+        print(f"Their no is reported to the tracker, but this machine couldn't save it. Run the same decline "
+              f"again in a moment so it sticks here. Nothing more to say to the builder about \"{a.name}\".")
 
 
 def cmd_not_yet(a):
-    with core.locked() as data:
+    tx = core.locked()
+    with tx as data:
         sess = core.session(data, a.session)
         sess["answer"] = "not-yet"
         sess["changes_at_answer"] = sess.get("changes", 0)
         b = core.build(data, a.key)
         b["not_yet"] = (b.get("not_yet", []) + [core.now_iso()])[-10:]
         b["last_not_yet_reason"] = (a.reason or "")[:200]
-    print("Recorded. Nothing to show the builder.")
+    print("Recorded. Nothing to show the builder." if tx.saved else NOT_SAVED)
 
 
 def cmd_settled(a):
     """The work is a build already settled here, or an existing tool already on
     the tracker. Recorded against the name, so a repo is never asked again and
     a folder lists it next time."""
-    with core.locked() as data:
+    tx = core.locked()
+    with tx as data:
         sess = core.session(data, a.session)
         sess["answer"] = "settled"
         b = core.build(data, a.key)
         if b["names"].get(a.name, {}).get("outcome") not in core.SETTLED:
             b["names"][a.name] = {"outcome": "settled", "at": core.now_iso()}
-    print("Recorded. Nothing to show the builder.")
+    print("Recorded. Nothing to show the builder." if tx.saved else NOT_SAVED)
 
 
 def _claim_next(data, now, skip):
@@ -322,15 +367,17 @@ def cmd_retry_pending(_a):
         ok, res = send_registration(item.get("payload", {}))
         status = res.get("status") if isinstance(res, dict) else None
         name = item.get("name", "")
+        newly_logged = False
         with core.locked() as data:
             queue = data.get("pending", [])
             current = next((q for q in queue if q.get("id") == item["id"]), None)
             if current is None:
-                continue  # another retry already finished it
+                continue  # another retry, or a newer answer, already finished it
             b = core.build(data, item.get("key", ""))
+            outcome = b["names"].get(name, {}).get("outcome")
             if ok or status in PERMANENT_HTTP:
                 data["pending"] = [q for q in queue if q.get("id") != item["id"]]
-            if ok and b["names"].get(name, {}).get("outcome") == "declined":
+            if ok and outcome == "declined":
                 # Declined while this send was in flight: the row exists now and
                 # can't be unsent, but their answer stands locally and in the record.
                 b["names"][name]["note"] = (b["names"][name].get("note", "") + " (a queued log reached the "
@@ -339,17 +386,20 @@ def cmd_retry_pending(_a):
                 entry = b["names"].get(name, {})
                 entry.update(outcome="logged", record_id=(res.get("automation") or {}).get("record_id", ""))
                 b["names"][name] = entry
-            elif status in PERMANENT_HTTP and b["names"].get(name, {}).get("outcome") != "declined":
+                newly_logged = outcome != "logged"
+            elif status in PERMANENT_HTTP:
                 # Refused for good (no such builder, say): reopen the build so it can
-                # be offered again, instead of leaving it "settled" with no row.
-                b["names"][name] = {"outcome": "offered", "at": core.now_iso(),
-                                    "note": f"tracker refused the log: {res.get('error', status)}"}
+                # be offered again, instead of leaving it "settled" with no row. Only
+                # while this queued log is still its answer: a newer one stands.
+                if outcome == "logged-pending":
+                    b["names"][name] = {"outcome": "offered", "at": core.now_iso(),
+                                        "note": f"tracker refused the log: {res.get('error', status)}"}
             else:
                 current["attempts"] = current.get("attempts", 1) + 1
                 hours = min(2 ** (current["attempts"] - 1), RETRY_MAX_HOURS)
                 current["next_try"] = (now + core.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
                 current.pop("inflight_until", None)
-        if ok:
+        if newly_logged:
             logged(name, res)
 
 
@@ -422,6 +472,9 @@ if __name__ == "__main__":
         main(sys.argv[1:])
     except SystemExit:
         pass
+    except core.Busy:
+        print("Not recorded: another Claude session is updating the exploration-log state right now. "
+              "Run the same command again in a moment.")
     except Exception as e:
         print(f"The exploration log helper hit an error ({type(e).__name__}); nothing was recorded.")
     sys.exit(0)

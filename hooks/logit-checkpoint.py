@@ -47,7 +47,8 @@ def on_prompt(payload):
     key = core.build_key(payload.get("cwd") or os.getcwd())
     pending = False
     out = ""
-    with core.locked() as data:
+    tx = core.locked()  # Busy (another session writing) ends the hook quietly: no ask this time
+    with tx as data:
         sess = core.session(data, sid)
         sess["key"] = key
         core.scan(sess, payload.get("transcript_path") or "")
@@ -64,7 +65,8 @@ def on_prompt(payload):
         pending = bool(data.get("pending"))
     if pending:
         retry_pending_detached()
-    if out:
+    # An ask that wasn't saved would be asked again at the next message.
+    if out and tx.saved:
         print(out)
 
 
@@ -73,7 +75,8 @@ def on_stop(payload):
     if not sid:
         return
     out = None
-    with core.locked() as data:
+    tx = core.locked()
+    with tx as data:
         sess = data["sessions"].get(sid)
         if not sess or not sess.get("asked_at") or sess.get("answer"):
             return
@@ -85,7 +88,7 @@ def on_stop(payload):
             sess["changes_at_answer"] = sess.get("changes", 0)
             b = core.build(data, sess.get("key") or core.build_key(payload.get("cwd")))
             b["ignored"] = b.get("ignored", 0) + 1
-    if out:
+    if out and tx.saved:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": out}}))
 
 
