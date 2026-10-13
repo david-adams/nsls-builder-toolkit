@@ -88,6 +88,9 @@ jobs:
       - name: A push through the PowerShell tool is judged by PowerShell's rules, on a real PC
         shell: pwsh
         run: python hooks/tests/test_gate_powershell_paths.py
+      - name: A repo with a .personal-repo file is not blocked as NSLS work in a personal repo, on a real PC
+        shell: pwsh
+        run: python hooks/tests/test_gate_personal_marker.py
       - name: The installer shows git's own error text, not a PowerShell error dump (PS 5.1)
         shell: powershell
         run: ./hooks/tests/windows/installer-native-output.ps1

@@ -7,7 +7,8 @@ trigger phrase never meets one. This hook is deterministic: it sees every Bash,
 Write and Edit call regardless of what the builder said.
 
 The four gates (see CLAUDE.md § Builder Guardrails):
-  1. NSLS work in a personal repo        — git remote isn't an NSLS org
+  1. NSLS work in a personal repo        — git remote isn't an NSLS org,
+                                           and no .personal-repo file
   2. Tier 3 ship with no tracker record  — deploying member-facing, unowned
   3. Production write at scale           — bulk writes, no reviewer, no rollback
   4. Off-platform at Tier 2+             — non-Anthropic SDK on a shared build
@@ -62,6 +63,13 @@ TRACKER_URL = os.environ.get(
     "NSLS_TRACKER_URL", "https://web-production-6281e.up.railway.app"
 )
 NSLS_ORGS = ("thensls",)
+
+# A repo declares itself personal with this file at its top level, and gate 1
+# then leaves it alone. Before it, a builder's own tool was blocked on every
+# push for as long as its README said "NSLS", even to say it was not NSLS work,
+# and a repo Kevin had authorized to stay put was blocked again on the next
+# push, because nothing remembered the authorization.
+PERSONAL_MARKER = ".personal-repo"
 
 # The hook's total budget is 10s (hooks.json). Every subprocess and socket here
 # has to fit inside it *cumulatively*, because a gate can chain several: repo
@@ -992,6 +1000,8 @@ def gate_personal_repo(tool: str, ti: dict):
     root = repo_root(cwd)
     if not root:
         return
+    if (Path(root) / PERSONAL_MARKER).is_file():
+        return  # the repo says it is personal; see PERSONAL_MARKER
     url = origin_url(root)
     if push_remote and push_remote != "origin" and not push_remote.startswith(
             ("http://", "https://", "git@")):
@@ -1016,7 +1026,10 @@ def gate_personal_repo(tool: str, ti: dict):
         f"Moving it to the NSLS org takes about a minute, keeps your full "
         f"history, and you stay the owner. Or Kevin can authorize it staying "
         f"put — I'll draft that note now if you'd rather.\n\n"
-        f"Which one?",
+        f"Which one?\n\n"
+        f"(If it's really a personal project, or Kevin has OK'd it staying put, "
+        f"an empty `{PERSONAL_MARKER}` file at the top of the repo tells this "
+        f"check to skip it from then on.)",
         gate="personal_repo",
         automation=Path(root).name,
     )
