@@ -91,6 +91,10 @@ code, out = quiet(["--lane", "python"], fake_repo({"test/test_ok.py": "# windows
 check("all passing passes", code == 0, out)
 code, out = quiet(["--list"], fake_repo({"test/test_typo.py": "# windows-ci: ps5 | a typo'd lane\n"}))
 check("a misspelled lane fails instead of skipping the test", code == 1 and "unknown lane" in out, out)
+for bad in ("# windows-ci: ps-51 | punctuation in the lane", "# windows-ci: python", "# windows_ci: python | x",
+            "# Windows-CI python | no colon"):
+    code, out = quiet(["--list"], fake_repo({"test/test_bad.py": bad + "\n", "test/test_ok.py": "# windows-ci: python | ok\n"}))
+    check(f"a marker that doesn't parse fails the step: {bad!r}", code == 1 and "doesn't parse" in out, out)
 code, out = quiet([], fake_repo({"test/notes.py": "nothing marked\n"}))
 check("no marked tests at all fails loudly", code == 1 and "no marked tests" in out, out)
 

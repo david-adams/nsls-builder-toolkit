@@ -31,17 +31,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DIRS = ("hooks/tests", "hooks/tests/windows", "test")
 MARK = re.compile(r"^#\s*windows-ci:\s*(?P<lanes>[a-z0-9 ]+?)\s*\|\s*(?P<title>\S.*?)\s*$")
+# Anything that looks like a marker but isn't one fails the step, so a typo'd
+# marker can't leave a test out of CI unnoticed.
+NEAR_MARK = re.compile(r"^#\s*windows[\s_-]*ci\b", re.IGNORECASE)
 SHELLS = {"ps51": ("powershell", "Windows PowerShell 5.1"), "ps7": ("pwsh", "PowerShell 7")}
 LANES = ("python",) + tuple(SHELLS)
 HEAD_LINES = 40
 
 
-def marked(root=ROOT):
-    """(path, lanes, title) for every test that opts in, in a stable order.
+def scan(root=ROOT):
+    """([(path, lanes, title)] for every test that opts in, [(path, line)] for every
+    marker that doesn't parse), in a stable order.
 
     The marker must start its line: the indented examples above don't count, and
     this runner never runs itself."""
-    found = []
+    found, malformed = [], []
     for d in DIRS:
         folder = root / d
         if not folder.is_dir():
@@ -51,11 +55,20 @@ def marked(root=ROOT):
                 continue
             with open(f, encoding="utf-8-sig", errors="replace") as fh:
                 for _, line in zip(range(HEAD_LINES), fh):
-                    m = MARK.match(line.rstrip())
+                    line = line.rstrip()
+                    m = MARK.match(line)
                     if m:
                         found.append((f, m.group("lanes").split(), m.group("title")))
                         break
-    return found
+                    if NEAR_MARK.match(line):
+                        malformed.append((f, line))
+                        break
+    return found, malformed
+
+
+def marked(root=ROOT):
+    """(path, lanes, title) for every test that opts in, in a stable order."""
+    return scan(root)[0]
 
 
 def lanes(name, root=ROOT):
@@ -86,11 +99,14 @@ def main(argv=None, root=ROOT):
     ap.add_argument("--list", action="store_true", help="show what would run, and run nothing")
     ap.add_argument("--lane", choices=LANES, help="run one lane only")
     a = ap.parse_args(argv)
-    tests = marked(root)
+    tests, malformed = scan(root)
     unknown = [(f, lane) for f, ls, _ in tests for lane in ls if lane not in LANES]
+    unknown += [(f, line) for f, line in malformed]
     for f, lane in unknown:
-        print(f"windows-ci: {f.relative_to(root).as_posix()} names an unknown lane {lane!r} "
-              f"(known: {', '.join(LANES)})")
+        what = (f"has a marker that doesn't parse: {lane!r}. The form is "
+                "`# windows-ci: <lanes> | <what it proves>`" if lane.startswith("#")
+                else f"names an unknown lane {lane!r}")
+        print(f"windows-ci: {f.relative_to(root).as_posix()} {what} (lanes: {', '.join(LANES)})")
     jobs = [(f, lane, title) for f, ls, title in tests for lane in ls
             if lane in LANES and (not a.lane or lane == a.lane)]
     if not jobs:
