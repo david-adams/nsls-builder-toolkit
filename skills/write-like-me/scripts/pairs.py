@@ -43,7 +43,7 @@ import re
 import statistics
 import sys
 import tempfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 SAME_PIECE = 0.5      # word overlap between two versions of one piece
@@ -66,7 +66,9 @@ NOISE = ("<command-", "<local-command", "<system-reminder", "<task-notification"
          "This session is being continued", "<user-prompt-submit-hook",
          "Another Claude session sent a message", "<cross-session-message")
 FENCE = re.compile(r"```([^\n`]*)\n(.*?)```", re.S)
-EMOJI = re.compile(r":[a-z0-9_+\-]+:")
+EMOJI = re.compile(r":[a-z][a-z0-9_+\-]*:")
+MARKUP = re.compile(r"[*_~`]")                     # Slack and Markdown emphasis marks
+BULLET = re.compile(r"^\s*[-*•◦]\s+")              # -, * and • bullets render the same
 LINK = re.compile(r"<https?://[^>|]+(?:\|[^>]*)?>|\[[^\]]*\]\(https?://[^)]+\)|https?://\S+")
 CODE = re.compile(r"^\s*(\$ |def |import |from \S+ import |class |function |const |#!)", re.M)
 
@@ -74,23 +76,28 @@ CODE = re.compile(r"^\s*(\$ |def |import |from \S+ import |class |function |cons
 # ---------- text helpers ----------
 
 def clean(text):
+    """Remove what differs only in how a destination renders text: quote styles,
+    links, emoji codes, emphasis marks and bullet glyphs."""
     text = (text.replace("’", "'").replace("‘", "'")
                 .replace("“", '"').replace("”", '"'))
-    return EMOJI.sub("", LINK.sub(" link ", text)).lower()
+    text = EMOJI.sub("", LINK.sub(" link ", text))
+    return "\n".join(MARKUP.sub("", BULLET.sub("• ", line)) for line in text.split("\n"))
 
 
-def tokens(text, lines=True):
-    """Words, ! and ?, plus one token per line, so tone and layout changes count."""
+def tokens(text):
+    """What a reader sees change: words as written (case kept), every punctuation
+    mark, and one token per line, so tone and layout edits all count."""
     out = []
     for line in clean(text).split("\n"):
-        out += re.findall(r"[a-z0-9']+|[!?]", line)
-        if lines:
-            out.append("¶")
+        out += re.findall(r"[\w']+|[^\w\s]", line)
+        out.append("¶")
     return out
 
 
 def wordset(text):
-    return {t for t in tokens(text, lines=False) if t not in ("!", "?")}
+    """Lower-case words only. Used to find which draft a final came from, never
+    to measure change."""
+    return set(re.findall(r"[\w']+", clean(text).lower()))
 
 
 def overlap(a, b):
@@ -286,6 +293,21 @@ def pieces_in(events, label):
     return pieces
 
 
+def add_piece(pieces, seen, piece):
+    """Add a piece, merging the copy a resumed session makes of an earlier one:
+    keep the copy with more versions, and never lose the other copy's sends."""
+    key = (piece["versions"][0]["time"], piece["versions"][0]["text"].strip())
+    twin = seen.get(key)
+    if twin is None:
+        seen[key] = piece
+        pieces.append(piece)
+        return
+    keep, drop = (piece, twin) if len(piece["versions"]) > len(twin["versions"]) else (twin, piece)
+    keep["sends"] += [s for s in drop["sends"] if s not in keep["sends"]]
+    if keep is piece:
+        pieces[pieces.index(twin)] = seen[key] = piece
+
+
 def cmd_drafts(args):
     start = date.fromisoformat(args.start) - timedelta(days=args.lead_days)
     end = date.fromisoformat(args.end)
@@ -299,13 +321,7 @@ def cmd_drafts(args):
                 continue
             sessions += 1
             for piece in pieces_in(events, Path(path).stem[:8]):
-                key = (piece["versions"][0]["time"], piece["versions"][0]["text"].strip())
-                twin = seen.get(key)   # resumed sessions copy their history
-                if twin is None:
-                    seen[key] = piece
-                    pieces.append(piece)
-                elif len(piece["versions"]) > len(twin["versions"]):
-                    pieces[pieces.index(twin)] = seen[key] = piece
+                add_piece(pieces, seen, piece)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(pieces, fh, ensure_ascii=False, indent=1)
@@ -333,9 +349,9 @@ def best_version(piece, words, sent_at):
 def closeness(piece, text, words, sent_at):
     """How alike in wording (then how recent) this piece's best version is."""
     final = tokens(text)
-    return max(((ratio(tokens(v["text"]), final), v["time"]) for v in piece["versions"]
+    return max(((ratio(tokens(v["text"]), final), parse_time(v["time"])) for v in piece["versions"]
                 if in_window(v, sent_at) and overlap(words, wordset(v["text"])) >= MATCH),
-               default=(0.0, ""))
+               default=(0.0, datetime.min.replace(tzinfo=timezone.utc)))
 
 
 def cmd_match(args):
@@ -360,8 +376,9 @@ def cmd_match(args):
             row["alternates"] = [{"draft_id": q["id"],
                                   "start": " ".join(q["versions"][-1]["text"].split())[:120]}
                                  for _, q in close[1:4]]
-        k = max(i for i, v in enumerate(p["versions"])
-                if in_window(v, sent_at) and overlap(words, wordset(v["text"])) >= MATCH)
+        # The piece was chosen by overlap. Its last version is simply the latest one
+        # Claude offered before sending, even if that one drifted from the final.
+        k = max(i for i, v in enumerate(p["versions"]) if in_window(v, sent_at))
         first, last = p["versions"][0], p["versions"][k]
         # Claude's own send counts only if the final is that text, near enough
         # word for word, so an edited repost is never mistaken for it.

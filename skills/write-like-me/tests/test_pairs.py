@@ -185,6 +185,33 @@ class Attribution(Base):
         self.assertEqual([c["text"] for c in by_id["sam"]["corrections"]], ["Now the board reminder please."],
                          "the reply to the later board draft is not a correction to Sam's note")
 
+    def test_latest_revision_is_the_last_draft_even_if_it_drifted(self):
+        v1 = " ".join(f"alpha{i}" for i in range(20))
+        v2 = v1 + " " + " ".join(f"beta{i}" for i in range(10))
+        final = v1 + " " + " ".join(f"gamma{i}" for i in range(15))
+        self.session("s", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(v1)),
+            row("user", "2026-10-10T14:01:00Z", "Add the beta items."),
+            row("assistant", "2026-10-10T14:02:00Z", fenced(v2)),
+        ])
+        by_id, _ = self.run_all([{"id": "f", "source": "slack",
+                                  "time": "2026-10-10T10:30:00-04:00", "text": final}])
+        self.assertEqual(by_id["f"]["versions"], 2)
+        self.assertEqual(by_id["f"]["last_draft"], v2)
+        self.assertEqual([c["text"] for c in by_id["f"]["corrections"]], ["Add the beta items."])
+
+    def test_send_in_a_resumed_copy_is_kept(self):
+        self.session("a", [row("assistant", "2026-10-10T14:00:00Z", fenced(POSTED))])
+        self.session("b", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(POSTED)),
+            row("assistant", "2026-10-10T14:05:00Z", [
+                {"type": "tool_use", "name": "mcp__abc__slack_send_message",
+                 "input": {"channel_id": "C1", "message": POSTED}}]),
+        ])
+        by_id, _ = self.run_all([{"id": "poll", "source": "slack",
+                                  "time": "2026-10-10T10:06:00-04:00", "text": POSTED}])
+        self.assertEqual(by_id["poll"]["status"], "posted by Claude")
+
     def test_one_reply_to_several_drafts_counts_for_each(self):
         self.session("s", [
             row("assistant", "2026-10-10T14:00:00Z", text("Two drafts:\n\n```\n" + DRAFT_1 + "\n```\n\n```\n" + OTHER + "\n```")),
@@ -207,12 +234,38 @@ class Measures(unittest.TestCase):
         row["hunks"] = pairs.hunks(row["first_draft"], row["final"])
         raw = pairs.style_changed(row)
         for h in row["hunks"]:
-            h["kind"] = "fact" if "trina" in h["before"] else "style"
+            h["kind"] = "fact" if "Trina" in h["before"] else "style"
         self.assertLess(pairs.style_changed(row), raw)
         self.assertGreater(pairs.style_changed(row), 0, "the line break is still style")
 
     def test_exclamation_marks_count_as_a_change(self):
         self.assertGreater(pairs.changed("Hi Sam! Could you test it?", "Hi Sam. Could you test it?"), 0)
+
+    def test_case_and_punctuation_edits_count(self):
+        self.assertGreater(pairs.changed("Hi Jenna. Thanks.", "hi Jenna - thanks."), 0)
+
+    def test_rendering_differences_do_not_count(self):
+        self.assertEqual(pairs.changed("**Quick poll:** pick one\n- yes\n- no",
+                                       "Quick poll: pick one\n\u2022 yes\n\u2022 no"), 0.0)
+
+    def test_merging_copies_keeps_sends_in_either_order(self):
+        def piece(sends):
+            return {"versions": [{"time": "2026-10-10T14:00:00+00:00", "text": POSTED}],
+                    "sends": [{"time": "2026-10-10T14:05:00+00:00", "text": POSTED}] if sends else []}
+        for order in ((False, True), (True, False)):
+            pieces, seen = [], {}
+            for has_send in order:
+                pairs.add_piece(pieces, seen, piece(has_send))
+            self.assertEqual(len(pieces), 1)
+            self.assertEqual(len(pieces[0]["sends"]), 1, f"order {order}")
+
+    def test_recency_tie_break_compares_real_times(self):
+        same = "The plan for the spring term is ready for your review this week, thanks."
+        earlier = {"versions": [{"time": "2026-10-10T14:00:00+00:00", "text": same}]}
+        later = {"versions": [{"time": "2026-10-10T10:30:00-04:00", "text": same}]}  # 14:30 UTC
+        sent = pairs.parse_time("2026-10-10T11:00:00-04:00")
+        words = pairs.wordset(same)
+        self.assertGreater(pairs.closeness(later, same, words, sent), pairs.closeness(earlier, same, words, sent))
 
     def test_repeated_words_keep_fact_spans_exact(self):
         row = {"first_draft": "Thanks Ana. Thanks again Ana for the notes.",
