@@ -94,12 +94,12 @@ jobs:
       - name: The installer shows git's own error text (PowerShell 7)
         shell: pwsh
         run: ./hooks/tests/windows/installer-native-output.ps1
+      - name: A builder's no is remembered outside a git repo too (keyed by folder)
+        shell: pwsh
+        run: python hooks/tests/test_guardrail_memory_folders.py
       - name: The plugin hooks speak UTF-8 on a Windows pipe (policy printed whole, gate reads accented paths and emoji)
         shell: pwsh
         run: python hooks/tests/test_plugin_hooks_utf8.py
       - name: The guardrail policy reaches Claude whole (under the hook-output cap, its own hook on clear and compact, no bare python3)
         shell: pwsh
         run: python hooks/tests/test_guardrail_policy_budget.py
-      - name: A builder's no is remembered outside a git repo too (keyed by folder)
-        shell: pwsh
-        run: python hooks/tests/test_guardrail_memory_folders.py
