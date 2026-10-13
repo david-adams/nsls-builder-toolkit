@@ -100,3 +100,6 @@ jobs:
       - name: The guardrail policy reaches Claude whole (under the hook-output cap, its own hook on clear and compact, no bare python3)
         shell: pwsh
         run: python hooks/tests/test_guardrail_policy_budget.py
+      - name: The installed-skills neighbour check ignores one shared common word, and still finds a real neighbour
+        shell: pwsh
+        run: python test/test_similar_skills.py
