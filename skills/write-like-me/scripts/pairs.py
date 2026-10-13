@@ -80,17 +80,17 @@ def clean(text):
 
 
 def tokens(text, lines=True):
-    """Words, plus one token per line so layout changes count."""
+    """Words, ! and ?, plus one token per line, so tone and layout changes count."""
     out = []
     for line in clean(text).split("\n"):
-        out += re.findall(r"[a-z0-9']+", line)
+        out += re.findall(r"[a-z0-9']+|[!?]", line)
         if lines:
             out.append("¶")
     return out
 
 
 def wordset(text):
-    return set(tokens(text, lines=False))
+    return {t for t in tokens(text, lines=False) if t not in ("!", "?")}
 
 
 def overlap(a, b):

@@ -211,6 +211,9 @@ class Measures(unittest.TestCase):
         self.assertLess(pairs.style_changed(row), raw)
         self.assertGreater(pairs.style_changed(row), 0, "the line break is still style")
 
+    def test_exclamation_marks_count_as_a_change(self):
+        self.assertGreater(pairs.changed("Hi Sam! Could you test it?", "Hi Sam. Could you test it?"), 0)
+
     def test_repeated_words_keep_fact_spans_exact(self):
         row = {"first_draft": "Thanks Ana. Thanks again Ana for the notes.",
                "final": "Thanks Ben. Thanks again Ben for the notes."}
