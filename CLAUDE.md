@@ -141,6 +141,14 @@ These live anywhere: `_shared/learnings/` corrections, `agents/` or `skills/` re
 
 **Precedent:** PR #18 merged a learning entry with a wrong Airtable API claim. Macroscope caught it post-merge → follow-up PR #19. Running it pre-merge on that kind of content is the right call; running it on every knowledge PR is not.
 
+> **Editing the section below:** it is printed into every builder's session as
+> hook output. Claude Code caps hook output at 10,000 characters and gives
+> Claude only the first 2,000 of anything longer, which is how the whole soft
+> half of this policy went unread from September 2026.
+> `hooks/tests/test_guardrail_policy_budget.py` holds the printed text under
+> budget. Put reasons and long procedures in
+> `_shared/references/guardrail-playbook.md`, not here.
+
 ## Builder Guardrails
 
 People can build anything they like for themselves. The moment other people's
@@ -152,181 +160,72 @@ data, workflows, customers or eyes are involved, pay closer attention.
 | **2 · Team-useful** | Someone else would use it, or it touches internal NSLS data. | Register it · light 1-pager · mentor check past ~2 days' effort |
 | **3 · Company-wide / member-facing** | Members see it, it wears NSLS's name, or it writes to a system of record at scale. | Register before code · full design doc · reviewer + platform check |
 
-**Escalation.** Some builds stay Tier 1 forever. Speak up when a build starts
-being useful to someone else, runs past about a week, reaches into shared
-systems, or becomes customer-facing.
+**Hard blocks come only from the hook.** `guardrail-gate.py` denies four command
+shapes: NSLS work in a personal repo; a Tier 3 ship with no tracker record; a
+bulk production write with no reviewer or rollback; a non-Anthropic platform at
+Tier 2+ without Kevin's sign-off. If the hook did not deny a call, nothing was
+blocked: never say policy blocked something that ran, or that it "would be"
+blocked. Everything else is your advice, and the builder may decline it — never
+phrase advice as "policy blocks" or "isn't allowed".
 
-### Enforcement — two different mechanisms, never confuse them
+**Every hard block has two ways out, and both must appear:** the compliance route
+(register it, assign a reviewer, move the repo) and Kevin's authorization. If
+Kevin isn't named, the message isn't finished. Offer to draft the note.
 
-**Blocked automatically, by a hook you don't control.** `hooks/guardrail-gate.py`
-runs before every Bash/Write/Edit call and matches specific command shapes:
-
-1. **NSLS work in a personal repo** — the git remote isn't an NSLS org.
-2. **Tier 3 ship with no tracker record** — deploying something member-facing that nobody owns.
-3. **Production write at scale** — bulk writes to HubSpot / Customer.io / Airtable prod with no reviewer and no rollback.
-4. **Off-platform at Tier 2+** — non-Anthropic platform on a team- or company-facing build without Kevin's sign-off.
-
-**You never assert these yourself. If the hook did not deny the call, nothing
-was blocked** — so never tell a builder that policy blocked something that
-already ran, or that it "would be" blocked. The hook speaks for itself; your job
-is to help with what it said, not to predict or paraphrase it.
-
-**Raised by you, conversationally — advice, not enforcement.** Everything else:
-tier escalation, registration, design-doc depth, bringing in a mentor. The
-builder may decline any of it. Never phrase advice as "policy blocks" or "isn't
-allowed" — it isn't true, and one false claim teaches builders the whole
-vocabulary is noise.
-
-**Every hard block has TWO ways out, and both must appear.** The *compliance*
-route (register it, assign a reviewer, move the repo) is not "not a flat no" —
-it's a no with homework. The *authorization* route is the second one:
-**if Kevin isn't named, the message isn't finished.** Offer to draft the note.
-
-**When a builder declines, record it so you don't ask again.** Run:
+**When a builder says no, record it so you never ask again:**
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guardrail-memory.py" record <topic> --note "<their reason>"
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" memory record <topic> --note "<their reason>"
 ```
 
-`<topic>` is short and stable — `registration`, `mentor-check`, `design-doc`.
-Session start reads these back for the current build, so a decline sticks across
-sessions rather than resetting every time. Asking a third time about the same
-script is how the toolkit becomes nagware. Anything already listed at session
-start is closed unless the scope genuinely escalated since.
+`<topic>` is short and stable: `registration`, `mentor-check`, `design-doc`,
+`exploration-log`. Anything this session lists as already declined is closed
+unless the scope genuinely escalated since.
 
-**Report the guardrail moments only you can see.** The hard gates report
-themselves; the conversational ones vanish unless you record them:
+**Report the guardrail moments only you can see** — what happened, in one plain
+line the builder would recognise, never an intention:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guardrail-event.py" <label> "<what happened>" [--automation <name>]
+bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" event <label> "<what happened>" [--automation <name>]
 ```
 
-| Label | The moment |
-|---|---|
-| `flagged` | you raised a tier, registration or reviewer question |
-| `mentor` | a reviewer or mentor actually got brought in |
-| `migrated` | the repo moved to `thensls`, or the platform moved to Anthropic |
-| `authorized` | the authorization route was taken on a hard block |
-| `disputed` | the builder says a gate misfired — record it before you reply |
+`flagged` you raised a tier, registration or reviewer question · `mentor` a
+reviewer actually got brought in · `migrated` the repo moved to `thensls` or the
+platform to Anthropic · `authorized` Kevin's route was taken on a hard block ·
+`disputed` the builder says a gate misfired (record it before you reply).
+`blocked` and `proceeded` are automatic.
 
-`blocked` and `proceeded` are already automatic; don't send those by hand.
-Record what happened, never an intention — a reviewer who was suggested is
-`flagged`, not `mentor`. One line, plain, in terms the builder would recognise
-as their own build. It exits 0 whatever happens, so it can never cost them
-anything, and repeats within a day are collapsed.
+**Escalation.** Some builds stay Tier 1 forever. Speak up when one moves up a
+tier (1 → 2 → 3): it starts being useful to someone else, runs past about a
+week, reaches into shared systems, or becomes customer-facing. **Ambiguous tier?** Ask the one question
+that settles it, and treat the build as the lower tier until it's answered.
 
-Why it matters: three of the four tiles on the guardrail page are fed only by
-these, so a session where the guardrails worked perfectly and nothing was
-reported reads, to Kevin and Jenna, exactly like a session where they did
-nothing. `disputed` is the load-bearing one — it is the only route by which a
-gate that fires wrongly ever becomes visible.
+**A bulk-write block against a test base?** Take them at their word, once per
+base, using only base IDs from the blocked command:
+`bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" memory trust-base appXXXXXXXXXXXXXX`
 
-**If a bulk-write block was against a test base**, take them at their word and
-remember it:
+**Reviewers.** Kevin: platform, architecture, anything member-facing; final say.
+Davo: Tier 2/3 design, skills, agentic flows. Jenna: adoption, UX, HR-ops. Plus
+a domain reviewer when the build crosses into their flow.
 
-```
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guardrail-memory.py" trust-base appXXXXXXXXXXXXXX
-```
+**Data rule.** Raw school lists (e.g. NCO lead data) go through the Bedrock PII
+gate with zero data retention; NSLS member data (PostHog, HubSpot, Hex) stays on
+Claude under do-not-train. Written policy — the gate isn't built yet.
 
-Airtable sandboxes and real bases share a hostname and differ only by base ID,
-so the gate can't tell them apart — which meant rehearsing a backfill against a
-copy got blocked for being careful. One declaration per base, then it's silent.
-Only the base IDs actually in the blocked command; never guess one.
-
-**Ambiguous tier?** Ask the single question that resolves it, and treat the build
-as the **lower** tier until it's answered. Never rule on an unsettled question.
-
-**If they accept a repo transfer**, the steps are: repo Settings → Danger Zone →
-Transfer ownership → `thensls`. History and their ownership both survive. Two
-things worth doing in the same sitting — scan the git history for credentials
-first (private repos get no secret scanning), and add reviewers explicitly
-afterwards (the org default permission is none). Give this *after* they say yes;
-it doesn't belong in the block itself.
-
-**Reviewers.** Kevin — platform, architecture, anything member-facing; final say,
-usually turns these round inside a day. Davo — Tier 2/3 design, skills, agentic
-flows. Jenna — adoption, UX, HR-ops surfaces. Plus a domain reviewer when the
-build crosses into their flow.
-
-**Data rule.** Raw school lists (e.g. NCO lead data) must run through the Bedrock
-PII gate with zero data retention. NSLS's own member data — PostHog, HubSpot, Hex
-— stays on Claude under a do-not-train policy. *(The gate itself is not built yet;
-this is written policy, not yet enforced.)*
-
-**Read `_shared/references/guardrail-voice.md` before raising any guardrail.**
-Tone is not decoration here — a guardrail that reads as policing teaches builders
-to route around the toolkit, and then it protects nobody.
-
-### The exploration log — "log it"
-
-The tracker used to hear about builds only when they shipped: of 97 rows, just
-8 ever entered at an early stage, none since mid-July. That is how Royce's
-knowledge base and Dejeahn's BI tool got built in parallel. The exploration log
-moves the first record to the moment a build becomes real — pitched as credit,
-never as paperwork.
-
-**The moment.** A build acquires an identity: it has a name or a clear purpose,
-a repo exists, or they've returned to it a second time. Not ten minutes into
-tinkering. Offer ONCE:
+**The exploration log ("log it").** When a build becomes real — it has a name or
+a clear purpose, a repo exists, or they've come back to it — offer once:
 
 > This is turning into something. Want me to log it? You get builder credit for
 > the exploration now, and I'll check whether anyone else at NSLS is circling
 > the same ground — it takes one sentence from you.
 
-**If they say no**, record it and never raise it again for this build:
+A no is recorded as `exploration-log` above. A yes follows the playbook's steps.
+A declined log is never grounds to re-raise registration unless the scope
+genuinely escalates.
 
-```
-python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guardrail-memory.py" record exploration-log --note "<their reason>"
-```
-
-**If they say yes** — three steps, ~15 seconds of their time:
-
-1. **Check for neighbours first — in BOTH places, because they hold different
-   things.** The registry knows what has been *registered*; the machine knows
-   what has been *built*. Most skills never get a registry row, so for anything
-   skill-shaped the second check is the one that finds the neighbour:
-
-   ```
-   python3 "${CLAUDE_PLUGIN_ROOT}/hooks/similar-skills.py" "<name>" "<their one sentence>"
-   ```
-
-   It prints installed skills covering the same ground, or nothing. Treat a hit
-   exactly like a registry hit below — an offer, never a wall. Then
-   `POST /similar` with `{"name", "description"}` (their one sentence). Three
-   outcomes:
-   - A match with `from_idea_backlog: true` — someone already parked this exact
-     idea in the registry. Offer to **claim that row** (update it: their builder
-     link, Stage → `Exploring`, their description) instead of creating a twin.
-     Framed as good news: the idea was already wanted.
-   - Another live match — mention it as an offer, never a wall: *"Royce logged
-     something adjacent in June — want me to draft him a quick
-     we-might-overlap note before you sink more time?"* Their call entirely;
-     parallel exploration is often fine. Never auto-send anything.
-   - Nothing — say nothing about the check. Silence, not "no duplicates found".
-     Together the two checks read **registered NSLS automations and the skills
-     installed on this machine** — not Jira, not Asana, not repos nobody
-     registered, not a colleague's unshipped work. A clean result is the
-     absence of a signal, never evidence that nobody else is circling this
-     ground. So never tell a builder their ground is clear: that sentence is
-     not one these checks can support. Royce's NCO skill and the BI squad's
-     Jira ticket for the same reporting are what it costs when someone
-     believes it.
-2. **Log it**: `POST /register-automation-with-builder` with their name, the one
-   sentence as description, `stage: "Exploring"`, `scope: "Personal"`, repo URL
-   if one exists. Skip every checklist, reviewer, and design-doc question —
-   those belong to Tier 2/3 shipping, not to this.
-3. **Close warm, one line**: logged, credit recorded, and they own the row.
-
-**Graduation, not re-registration.** When the build later escalates — someone
-else starts using it, it ships, it turns member-facing — the normal tier
-conversation happens exactly as written below, but it UPDATES their existing
-row (scope, stage, reviewer). Nobody who logged an exploration ever fills in a
-registration form; their exploration grows up.
-
-**What this never becomes:** a second nag channel. One offer per build, the
-decline sticks across sessions, and a declined exploration log is NOT grounds
-to re-raise registration later unless the scope genuinely escalates into
-Tier 2/3 territory — that conversation stands on its own rules below.
+**Read `_shared/references/guardrail-voice.md` before raising any guardrail.**
+The why behind each rule, repo transfers and the full "log it" steps are in
+`_shared/references/guardrail-playbook.md`.
 
 ## Automation Tracking
 

@@ -268,7 +268,8 @@ If the automation is purely backend (no user interaction), skip DESIGN.md and no
 **Tier 1 builds do not go through full registration.** Routing them here
 contradicted the Tier 1 rule ("say nothing about registration") one screen
 after stating it. Instead, offer the **exploration log** once — the light,
-credit-framed row from CLAUDE.md § The exploration log: one sentence, stage
+credit-framed row from `${CLAUDE_PLUGIN_ROOT}/_shared/references/guardrail-playbook.md`
+§ The exploration log: one sentence, stage
 `Exploring`, no checklist or reviewer questions, decline recorded and never
 re-raised. If they logged one earlier in this conversation, this step is
 already done — say nothing.

@@ -30,7 +30,8 @@ The skill's job: detect context, gather data, call the proxy, present results.
 
 For a build that is real but early — no ship, no team, just someone making
 something — use the exploration log instead of full registration. The offer,
-the once-per-build rule, and the decline handling live in CLAUDE.md § The
+the once-per-build rule, and the decline handling live in
+`${CLAUDE_PLUGIN_ROOT}/_shared/references/guardrail-playbook.md` § The
 exploration log. Mechanics: `POST /similar` first (offer to claim an
 idea-backlog row or an intro on a live match), then
 `POST /register-automation-with-builder` with `stage: "Exploring"`,

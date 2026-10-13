@@ -19,9 +19,15 @@
 # CONTRACT: exit 2 passes through (the only code that blocks a tool call);
 # everything else exits 0 with whatever the script printed. A hook that cannot
 # run is silence, never a notice — fail open is the gate's first design rule.
+#
+# The same launcher runs the helpers Claude itself calls from the guardrail
+# policy (memory, event, similar), with their arguments passed through. Those
+# used to be written as `python3 ...`, which does not exist on stock Windows, so
+# on a PC a builder's "no thanks" was never recorded and the event never sent.
 set -u
 
 sub="${1:-}"
+[ "$#" -gt 0 ] && shift
 root="${CLAUDE_PLUGIN_ROOT:-}"
 if [ -z "$root" ]; then
   root="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd)" || exit 0
@@ -30,6 +36,10 @@ fi
 case "$sub" in
   gate)          script="$root/hooks/guardrail-gate.py" ;;
   session-start) script="$root/hooks/session-start.py" ;;
+  policy)        script="$root/hooks/guardrail-policy.py" ;;
+  memory)        script="$root/hooks/guardrail-memory.py" ;;
+  event)         script="$root/hooks/guardrail-event.py" ;;
+  similar)       script="$root/hooks/similar-skills.py" ;;
   *)             exit 0 ;;
 esac
 [ -f "$script" ] || exit 0
@@ -175,8 +185,15 @@ py|-3" ;;
 fi
 
 # No Python at all: silence. The gate fails open by absence, exactly as its
-# design rules say, and the builder sees nothing.
-[ -n "$py" ] || exit 0
+# design rules say, and the builder sees nothing. The helpers Claude calls
+# itself say so instead, so Claude never reports a decline as remembered when
+# it was not.
+if [ -z "$py" ]; then
+  case "$sub" in
+    memory|event|similar) echo "Not run: no Python 3 found on this machine, so nothing was recorded or checked." ;;
+  esac
+  exit 0
+fi
 
 # UTF-8 on every pipe. Claude Code speaks UTF-8 both ways, but Windows Python
 # reads and writes a pipe in the ANSI code page (cp1252), and strictly. The
@@ -187,9 +204,9 @@ fi
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
 
 if [ -n "$flag" ]; then
-  "$py" "$flag" "$script"
+  "$py" "$flag" "$script" "$@"
 else
-  "$py" "$script"
+  "$py" "$script" "$@"
 fi
 status=$?
 [ "$status" = "2" ] && exit 2

@@ -10,6 +10,7 @@ on:
       - 'hooks/**'
       - 'install.ps1'
       - 'CLAUDE.md'
+      - '_shared/references/guardrail-*.md'
       - '.github/workflows/windows-hooks.yml'
   push:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - 'hooks/**'
       - 'install.ps1'
       - 'CLAUDE.md'
+      - '_shared/references/guardrail-*.md'
       - '.github/workflows/windows-hooks.yml'
 
 permissions:
@@ -95,3 +97,6 @@ jobs:
       - name: The plugin hooks speak UTF-8 on a Windows pipe (policy printed whole, gate reads accented paths and emoji)
         shell: pwsh
         run: python hooks/tests/test_plugin_hooks_utf8.py
+      - name: The guardrail policy reaches Claude whole (under the hook-output cap, its own hook on clear and compact, no bare python3)
+        shell: pwsh
+        run: python hooks/tests/test_guardrail_policy_budget.py
