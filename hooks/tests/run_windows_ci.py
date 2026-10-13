@@ -76,6 +76,24 @@ def lanes(name, root=ROOT):
     return next((ls for f, ls, _ in marked(root) if f.name == name), [])
 
 
+def ps51_env():
+    """The environment a `shell: powershell` step gets, for Windows PowerShell 5.1.
+
+    This runner itself runs in a PowerShell 7 step, and 5.1 started from there inherits
+    7's PSModulePath. It then finds its own modules' commands under 7's copies and can't
+    load them (Get-Acl: "the module could not be loaded"), and so can any 5.1 the script
+    starts. A real 5.1 step starts from the machine's PSModulePath, so use that."""
+    env = dict(os.environ)
+    try:
+        import winreg
+        key = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+            env["PSModulePath"] = os.path.expandvars(winreg.QueryValueEx(k, "PSModulePath")[0])
+    except Exception:
+        env.pop("PSModulePath", None)  # 5.1 then builds its own default
+    return env
+
+
 def run_one(path, lane, root=ROOT):
     """The test's exit code, or None when this machine has no such shell."""
     rel = path.relative_to(root).as_posix()
@@ -89,7 +107,8 @@ def run_one(path, lane, root=ROOT):
         tmp.write(f"$ErrorActionPreference = 'stop'\n./{rel}\n"
                   "if ((Test-Path -LiteralPath variable:\\LASTEXITCODE)) { exit $LASTEXITCODE }\n")
     try:
-        return subprocess.run([exe, "-command", f". '{tmp.name}'"], cwd=root).returncode
+        return subprocess.run([exe, "-command", f". '{tmp.name}'"], cwd=root,
+                              env=ps51_env() if lane == "ps51" else None).returncode
     finally:
         os.unlink(tmp.name)
 

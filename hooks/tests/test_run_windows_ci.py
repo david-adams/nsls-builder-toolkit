@@ -118,6 +118,16 @@ for lane in shells:
     check(f"{lane}: exit 0 passes", ci.run_one(by_name["c-zero.ps1"], lane, repo) == 0)
     check(f"{lane}: a clean script passes", ci.run_one(by_name["d-ok.ps1"], lane, repo) == 0)
 
+if "ps51" in shells:
+    # Started from the PowerShell 7 step, 5.1 used to inherit 7's module path and fail to
+    # load its own Get-Acl (install-settings-roundtrip.ps1, first run of this runner).
+    repo = fake_repo({"hooks/tests/windows/acl.ps1": "# windows-ci: ps51 | Get-Acl loads\n"
+                      "$f = New-TemporaryFile\n$null = Get-Acl -LiteralPath $f.FullName\n"
+                      "$null = Get-FileHash -LiteralPath $f.FullName\n'loaded'\n"})
+    acl = {f.name: f for f, _, _ in ci.marked(repo)}["acl.ps1"]
+    check("ps51: Windows PowerShell 5.1 loads its own modules (Get-Acl, Get-FileHash)",
+          ci.run_one(acl, "ps51", repo) == 0)
+
 print()
 if failures:
     print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
