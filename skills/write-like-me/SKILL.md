@@ -15,7 +15,7 @@ changes, keeps the ones about style, and turns them into rules the person approv
 The guide it saves loads whenever Claude drafts that kind of writing again.
 
 It uses two sources, both found automatically:
-1. **The session:** Claude's first draft, the corrections the person typed, and
+1. **The session:** Claude's first draft, the replies the person typed, and
    Claude's last version.
 2. **The destination:** what they actually sent: the Slack message, the sent email,
    the Google Doc.
@@ -40,8 +40,9 @@ on Windows), use `python` for all of them. Run them from this skill's folder.
     python3 scripts/pairs.py drafts --start YYYY-MM-DD --end YYYY-MM-DD
 
 This reads the Claude Code transcripts on this computer, plus the 7 days before the
-window, and saves every prose draft with its versions and the corrections typed
-between them. It prints the work folder it uses.
+window, and saves every prose draft with its versions and every reply the person typed
+to it, including replies after the last version (often edits they then made themselves).
+It prints the work folder it uses.
 
 ## Step 3: The destination source
 
@@ -69,9 +70,9 @@ on with what they paste.
 
 Before analysing anything, show one line per item:
 
-- `✓ Slack to Jenna, 10 Oct: first draft matched to the sent version · 1 correction · 31% changed`
+- `✓ Slack to Jenna, 10 Oct: first draft matched to the sent version · 2 replies from you · 31% changed`
 - `✓ … · close call: used the draft worded most like what you sent (another draft was similar)`
-- `◐ Slack poll, 7 Oct: Claude posted it itself · its corrections still count`
+- `◐ Slack poll, 7 Oct: Claude posted it itself · your replies to it still count`
 - `↺ Email to the board, 3 Oct: you rewrote most of it · used as a sample of your writing`
 
 Then add one count line: *"10 sent messages had no Claude draft, so they're samples of
@@ -87,7 +88,7 @@ writing (the samples) and label it "from samples only".
 
     python3 scripts/pairs.py show
 
-This prints every item with its corrections and its numbered changes. `/` marks a line
+This prints every item with the person's replies and its numbered changes. `/` marks a line
 break.
 
 - **Label the facts:** `python3 scripts/pairs.py label --facts 3:0,6 5:2` marks
@@ -98,7 +99,7 @@ break.
   - **Style** is how it's said: wording, tone, length, order, layout, line breaks,
     lists, punctuation, greetings and sign-offs.
   - **A mixed change counts as fact.** Style is what's left once the facts are out.
-- **Read the corrections.** Keep only requests about style ("shorter", "bullet these",
+- **Read the replies.** Most are next steps, not corrections. Keep only requests about style ("shorter", "bullet these",
   "no exclamation marks"). Ignore requests about facts or content, and anything not
   about this draft.
 - **Use samples as support.** Rewritten items and sent items with no Claude draft are
@@ -107,7 +108,7 @@ break.
 
 ## Step 6: Find the rules
 
-- **A rule** is something the person asked for in a correction, or something that
+- **A rule** is something the person asked for in a reply, or something that
   shows up in 3 or more items. Anything less goes on a **Maybe** list, which is not
   applied yet.
 - **Write each rule as one line Claude can follow and check:** "One sentence per

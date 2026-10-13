@@ -15,7 +15,8 @@ drafts  finds every prose draft Claude wrote in your sessions (fenced or quoted
         blocks, and text Claude put into a message, email or document tool),
         groups the versions of one piece together, and keeps the messages you
         typed in reply to the drafts Claude had just shown, until it revised
-        them: your corrections.
+        them, plus any typed after the last version. These are your replies;
+        the skill reads them to find the requests about style.
         It also reads 7 days before --start, because a message sent early in
         the window may have been drafted before it.
 finals  is a JSON list of {"id", "source", "time", "text"} that Claude saves in
@@ -26,7 +27,7 @@ match   pairs each final with the draft it came from: the piece whose versions
         final, then the latest, and lists the others so you can correct it. Then
         it uses that piece's latest version before sending. It measures how much
         of the first draft changed by the time it was sent.
-show    prints each item with its corrections and numbered changes.
+show    prints each item with your replies and its numbered changes.
 label   records which changes are facts (item number : change ids).
 score   reports the medians, counting fact changes as unchanged (an estimate).
 clean   deletes the work folder's files.
@@ -311,6 +312,8 @@ def pieces_in(events, label):
             for p in pieces:
                 if overlap(words, wordset(p["versions"][-1]["text"])) >= SAME_PIECE:
                     p["sends"].append({"time": ts.isoformat(), "text": payload})
+    for p in pieces:   # replies after the last version: often edits the person made themselves
+        p["after_last"] = pending.get(p["id"], [])
     return pieces
 
 
@@ -328,6 +331,8 @@ def add_piece(pieces, seen, piece):
     # Keep the longer chain, and never lose the other copy's sends or showings.
     keep, drop = (piece, twin) if len(piece["versions"]) > len(twin["versions"]) else (twin, piece)
     keep["sends"] += [s for s in drop["sends"] if s not in keep["sends"]]
+    keep["after_last"] = keep.get("after_last", []) + [
+        c for c in drop.get("after_last", []) if c not in keep.get("after_last", [])]
     for kv, dv in zip(keep["versions"], drop["versions"]):   # and every showing
         if kv["text"].strip() == dv["text"].strip():
             kv["shown"] = sorted(set(kv.get("shown", [kv["time"]]) + dv.get("shown", [dv["time"]])),
@@ -378,6 +383,16 @@ def times_in_window(version, sent_at):
     if not sent_at:
         return times
     return [t for t in times if sent_at - timedelta(days=MAX_DAYS) <= t <= sent_at + timedelta(minutes=2)]
+
+
+def unique_texts(replies):
+    """Drop repeats of the same message (transcripts sometimes record it twice)."""
+    seen, out = set(), []
+    for c in replies:
+        if c["text"] not in seen:
+            seen.add(c["text"])
+            out.append(c)
+    return out
 
 
 def in_window(version, sent_at):
@@ -432,7 +447,12 @@ def cmd_match(args):
             "status": "posted by Claude" if posted else "rewritten" if after >= REWRITE else "matched",
             "overlap": round(score, 2), "draft_id": p["id"], "versions": k + 1,
             "first_draft": first["text"], "last_draft": last["text"],
-            "corrections": [c for v in p["versions"][1:k + 1] for c in v.get("corrections_before", [])],
+            # Every reply to this piece's drafts typed before it was sent, including
+            # ones after Claude's last version that the person applied themselves.
+            "corrections": unique_texts(
+                [c for c in [c for v in p["versions"][1:] for c in v.get("corrections_before", [])]
+                 + p.get("after_last", [])
+                 if not sent_at or parse_time(c["time"]) <= sent_at + timedelta(minutes=2)]),
             "changed_from_first": changed(first["text"], text),
             "changed_after_claude": after,
             "hunks": hunks(first["text"], text),
@@ -448,7 +468,8 @@ def cmd_match(args):
         else:
             close = f", close call with {len(r['alternates'])} other draft(s)" if r.get("alternates") else ""
             print(f"#{n} {when}  {r['status']}, {r['versions']} version(s), "
-                  f"{len(r['corrections'])} correction(s), {r['changed_from_first']:.0%} changed from first draft, "
+                  f"{len(r['corrections'])} repl{'y' if len(r['corrections']) == 1 else 'ies'} from you, "
+                  f"{r['changed_from_first']:.0%} changed from first draft, "
                   f"{r['changed_after_claude']:.0%} after Claude's last version{close}")
     print(f"Saved to {args.out}")
 
@@ -466,7 +487,7 @@ def cmd_show(args):
         for a in r.get("alternates", []):
             print(f"   close call, also similar: {a['start']}")
         for c in r.get("corrections", []):
-            print(f"   correction: {' '.join(c['text'].split())[:1500]}")
+            print(f"   reply: {' '.join(c['text'].split())[:1500]}")
         if r["status"] == "rewritten":
             print(f"   sent version (a sample of your own writing): {final[:400]}")
             continue
@@ -508,7 +529,7 @@ def cmd_score(args):
           f"mean {statistics.mean(style):.0%}")
     print(f"Sent with no style change: {sum(1 for s in style if s < 0.02)} of {len(style)}")
     print(f"All changes after Claude's last version: median {statistics.median(after):.0%}")
-    print(f"Corrections typed per piece: median {statistics.median(corr):g}")
+    print(f"Replies typed to the drafts before sending: median {statistics.median(corr):g} per piece")
 
 
 def cmd_clean(args):

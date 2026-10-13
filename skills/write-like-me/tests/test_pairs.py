@@ -126,7 +126,7 @@ class EndToEnd(Base):
 
         shown = self.cli("show")
         self.assertIn("a sample of your own writing", shown)
-        self.assertIn("correction: No exclamation marks", shown)
+        self.assertIn("reply: No exclamation marks", shown)
         n = [i for i, r in enumerate(rows, 1) if r["final_id"] == "sam"][0]
         first_id = sam["hunks"][0]["id"]
         self.cli("label", "--facts", f"{n}:{first_id}")
@@ -283,6 +283,28 @@ class Attribution(Base):
                                   "time": "2026-10-10T10:20:00-04:00", "text": POSTED}])
         self.assertEqual(by_id["poll"]["status"], "matched", "the person posted it themselves")
 
+    def test_a_reply_after_the_last_draft_counts_if_typed_before_sending(self):
+        self.session("s", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(DRAFT_2)),
+            row("user", "2026-10-10T14:01:00Z", "Say tell me, not see. I'll fix it myself."),
+            row("user", "2026-10-10T15:30:00Z", "Thanks, sent it."),
+        ])
+        by_id, _ = self.run_all([{"id": "sam", "source": "slack",
+                                  "time": "2026-10-10T11:00:00-04:00", "text": SENT}])
+        self.assertEqual([c["text"] for c in by_id["sam"]["corrections"]],
+                         ["Say tell me, not see. I'll fix it myself."], "typed after sending: not a correction")
+
+    def test_a_message_recorded_twice_counts_once(self):
+        self.session("s", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(DRAFT_1)),
+            row("user", "2026-10-10T14:01:00Z", "No exclamation marks."),
+            row("user", "2026-10-10T14:01:01Z", "No exclamation marks."),
+            row("assistant", "2026-10-10T14:02:00Z", fenced(DRAFT_2)),
+        ])
+        by_id, _ = self.run_all([{"id": "sam", "source": "slack",
+                                  "time": "2026-10-10T11:00:00-04:00", "text": SENT}])
+        self.assertEqual(len(by_id["sam"]["corrections"]), 1)
+
     def test_one_reply_to_several_drafts_counts_for_each(self):
         self.session("s", [
             row("assistant", "2026-10-10T14:00:00Z", text("Two drafts:\n\n```\n" + DRAFT_1 + "\n```\n\n```\n" + OTHER + "\n```")),
@@ -341,6 +363,16 @@ class Measures(unittest.TestCase):
         pairs.add_piece(pieces, seen, chain(DRAFT_1, DRAFT_2, SENT))  # a copy that went further
         self.assertEqual(len(pieces), 2)
         self.assertEqual([len(p["versions"]) for p in pieces], [3, 2])
+
+    def test_merging_copies_keeps_replies_after_the_last_version(self):
+        def copy(after):
+            return {"versions": [{"time": "2026-10-01T14:00:00+00:00", "text": POSTED}], "sends": [],
+                    "after_last": after}
+        note = {"time": "2026-10-01T14:05:00+00:00", "text": "Shorter."}
+        pieces, seen = [], {}
+        pairs.add_piece(pieces, seen, copy([]))
+        pairs.add_piece(pieces, seen, copy([note]))
+        self.assertEqual(pieces[0]["after_last"], [note])
 
     def test_merging_copies_keeps_every_showing(self):
         a = {"versions": [{"time": "2026-10-01T14:00:00+00:00", "shown": ["2026-10-01T14:00:00+00:00"],
