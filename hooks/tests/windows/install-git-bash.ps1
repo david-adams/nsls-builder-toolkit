@@ -1,3 +1,4 @@
+# windows-ci: ps51 | install.ps1 counts Git Bash wherever Claude Code finds it
 # install.ps1's Git Bash check, run for real under Windows PowerShell 5.1.
 # It warned "Git Bash isn't callable from this shell ... the guardrails will
 # never fire" whenever Git's bin folder was off PATH, though Claude Code finds

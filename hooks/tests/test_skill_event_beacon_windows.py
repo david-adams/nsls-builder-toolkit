@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | The skill-event hook proves itself from a Windows path, so stage B can finish on a PC
 """skill-event.sh earns its beacon on a PC, and fired() can read it.
 
 Plain stdlib: `python3 hooks/tests/test_skill_event_beacon_windows.py`.

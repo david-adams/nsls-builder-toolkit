@@ -1,3 +1,4 @@
+# windows-ci: ps51 ps7 | Parse every hook script
 # Parse every hook script with PowerShell's own parser, without running any of
 # it. The Macs that write these files have no PowerShell, so a typo or a quoting
 # slip used to travel all the way to a builder's PC before anyone saw it.

@@ -1,3 +1,4 @@
+# windows-ci: ps51 | install.ps1 asks the plugin which hooks it already runs, and ignores a disabled plugin
 # install.ps1's Get-BeaconAnswer, run for real under Windows PowerShell 5.1.
 # It asks hooks/plugin_beacon.py which hooks the toolkit plugin already runs
 # here, so a re-install leaves alone what the migration retired. A text check

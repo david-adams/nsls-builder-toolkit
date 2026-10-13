@@ -1,3 +1,4 @@
+# windows-ci: ps51 | A clean fork catches itself up; nothing of theirs, no operation in progress, no merge setting or hook changes that
 # The catch-up for a clean fork, on a real PC. Report-PersonalForkDrift and the
 # helpers it calls are lifted out of session-start.ps1 by AST (its top level
 # pulls and pings, so it is never dot-sourced) and pointed at a throwaway world:

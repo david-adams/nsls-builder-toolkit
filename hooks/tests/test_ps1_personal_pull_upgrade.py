@@ -12,7 +12,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PS1 = (ROOT / "hooks" / "session-start.ps1").read_text(encoding="utf-8")
-CI = (ROOT / ".github" / "workflows" / "windows-hooks.yml").read_text(encoding="utf-8")
 failures = []
 
 # What the personal install.ps1 puts ahead of its pull, and the unset form it
@@ -69,8 +68,8 @@ check("a BOM is kept", "if ($bom) { $fs.Write($data, 0, 3) }" in body)
 check("a linked settings.json is left alone", "[System.IO.FileAttributes]::ReparsePoint" in body)
 check("nothing reaches stdout, the model's context", not re.search(r"Write-(Output|Host)|\becho\b", body, re.I))
 check("session-start.ps1 is ASCII-only", all(ord(c) < 128 for c in PS1))
-check("CI runs the real thing under Windows PowerShell 5.1",
-      re.search(r"shell: powershell\n\s+run: \./hooks/tests/windows/personal-pull-upgrade\.ps1", CI) is not None)
+import run_windows_ci  # noqa: E402  (beside this file; reads the `# windows-ci:` markers)
+check("CI runs the real thing under Windows PowerShell 5.1", "ps51" in run_windows_ci.lanes("personal-pull-upgrade.ps1"))
 
 if failures:
     print(f"FAILED: {len(failures)}"); sys.exit(1)

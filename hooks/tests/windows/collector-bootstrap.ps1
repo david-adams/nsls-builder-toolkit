@@ -1,3 +1,4 @@
+# windows-ci: ps51 | Collector bootstrap launches once, hidden, and stays out when installed or opted out
 # Collector bootstrap on a real PC, with Start-Process stubbed so the real
 # installer never runs. Proves under Windows PowerShell 5.1 that
 # Invoke-CollectorBootstrap (hooks/collector_bootstrap.ps1): launches once
