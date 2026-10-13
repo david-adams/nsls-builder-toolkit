@@ -234,12 +234,13 @@ class Attribution(Base):
                                   "text": SENT}], start="2026-10-01", end="2026-10-03")
         self.assertEqual(by_id["sam"]["versions"], 2, "8 days after the first showing, 4 after the last")
 
-    def test_match_creates_its_output_folder(self):
-        self.cli("drafts", "--start", "2026-10-09", "--end", "2026-10-11")
-        (self.dir / "work" / "finals.json").write_text("[]", encoding="utf-8")
-        out = self.dir / "elsewhere" / "new" / "pairs.json"
-        self.cli("match", "--out", str(out))
-        self.assertTrue(out.is_file())
+    def test_files_cannot_be_written_outside_the_work_folder(self):
+        for args in (["drafts", "--start", "2026-10-09", "--end", "2026-10-11", "--out", "x.json"],
+                     ["match", "--out", "x.json"], ["match", "--finals", "x.json"], ["score", "--pairs", "x.json"]):
+            out = subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.dir, env=self.env,
+                                 capture_output=True, text=True, encoding="utf-8")
+            self.assertNotEqual(out.returncode, 0, args)
+            self.assertFalse((self.dir / "x.json").exists())
 
     def test_one_reply_to_several_drafts_counts_for_each(self):
         self.session("s", [
@@ -287,6 +288,18 @@ class Measures(unittest.TestCase):
                 pairs.add_piece(pieces, seen, piece(has_send))
             self.assertEqual(len(pieces), 1)
             self.assertEqual(len(pieces[0]["sends"]), 1, f"order {order}")
+
+    def test_a_fork_keeps_both_revisions_and_a_copy_still_merges(self):
+        def chain(*texts):
+            return {"versions": [{"time": f"2026-10-01T1{i}:00:00+00:00", "text": x} for i, x in enumerate(texts)],
+                    "sends": []}
+        pieces, seen = [], {}
+        pairs.add_piece(pieces, seen, chain(DRAFT_1, DRAFT_2))
+        pairs.add_piece(pieces, seen, chain(DRAFT_1, OTHER))       # forked, revised differently
+        self.assertEqual(len(pieces), 2, "neither revision is lost")
+        pairs.add_piece(pieces, seen, chain(DRAFT_1, DRAFT_2, SENT))  # a copy that went further
+        self.assertEqual(len(pieces), 2)
+        self.assertEqual([len(p["versions"]) for p in pieces], [3, 2])
 
     def test_merging_copies_keeps_every_showing(self):
         a = {"versions": [{"time": "2026-10-01T14:00:00+00:00", "shown": ["2026-10-01T14:00:00+00:00"],

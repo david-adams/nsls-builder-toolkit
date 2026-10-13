@@ -31,8 +31,8 @@ label   records which changes are facts (item number : change ids).
 score   reports the medians, counting fact changes as unchanged (an estimate).
 clean   deletes the work folder's files.
 
-Files live in a "write-like-me" folder in the system temp directory unless
---out / --drafts / --finals / --pairs say otherwise.
+Every file lives in a "write-like-me" folder in the system temp directory
+(WRITE_LIKE_ME_WORK names another folder, for tests), so `clean` removes them all.
 """
 import argparse
 import difflib
@@ -297,14 +297,17 @@ def pieces_in(events, label):
 
 
 def add_piece(pieces, seen, piece):
-    """Add a piece, merging the copy a resumed session makes of an earlier one:
-    keep the copy with more versions, and never lose the other copy's sends."""
+    """Add a piece, merging the copy a resumed session makes of an earlier one.
+    Only a true copy merges: one chain of versions must be the start of the
+    other. A fork that revised the draft differently stays a separate piece,
+    so neither revision is lost; matching then treats them as a close call."""
     key = (piece["versions"][0]["time"], piece["versions"][0]["text"].strip())
-    twin = seen.get(key)
+    twin = next((t for t in seen.get(key, []) if same_chain(t, piece)), None)
     if twin is None:
-        seen[key] = piece
+        seen.setdefault(key, []).append(piece)
         pieces.append(piece)
         return
+    # Keep the longer chain, and never lose the other copy's sends or showings.
     keep, drop = (piece, twin) if len(piece["versions"]) > len(twin["versions"]) else (twin, piece)
     keep["sends"] += [s for s in drop["sends"] if s not in keep["sends"]]
     for kv, dv in zip(keep["versions"], drop["versions"]):   # and every showing
@@ -312,7 +315,13 @@ def add_piece(pieces, seen, piece):
             kv["shown"] = sorted(set(kv.get("shown", [kv["time"]]) + dv.get("shown", [dv["time"]])),
                                  key=parse_time)
     if keep is piece:
-        pieces[pieces.index(twin)] = seen[key] = piece
+        pieces[pieces.index(twin)] = piece
+        seen[key][seen[key].index(twin)] = piece
+
+
+def same_chain(a, b):
+    """True when one piece's versions are the start of the other's: a copy, not a fork."""
+    return all(x["text"].strip() == y["text"].strip() for x, y in zip(a["versions"], b["versions"]))
 
 
 def cmd_drafts(args):
@@ -507,18 +516,13 @@ def main():
     d.add_argument("--start", required=True)
     d.add_argument("--end", required=True)
     d.add_argument("--lead-days", type=int, default=LEAD_DAYS)
-    d.add_argument("--out", default=str(WORK / "drafts.json"))
-    m = sub.add_parser("match")
-    m.add_argument("--drafts", default=str(WORK / "drafts.json"))
-    m.add_argument("--finals", default=str(WORK / "finals.json"))
-    m.add_argument("--out", default=str(WORK / "pairs.json"))
-    for name in ("show", "score"):
-        sub.add_parser(name).add_argument("--pairs", default=str(WORK / "pairs.json"))
-    lab = sub.add_parser("label")
-    lab.add_argument("--pairs", default=str(WORK / "pairs.json"))
-    lab.add_argument("--facts", nargs="*", default=[], metavar="N:ID,ID")
-    sub.add_parser("clean")
+    for name in ("match", "show", "score", "clean"):
+        sub.add_parser(name)
+    sub.add_parser("label").add_argument("--facts", nargs="*", default=[], metavar="N:ID,ID")
     args = ap.parse_args()
+    # Every file lives in the work folder, so `clean` always finds all of them.
+    args.drafts, args.finals, args.pairs = WORK / "drafts.json", WORK / "finals.json", WORK / "pairs.json"
+    args.out = args.drafts if args.cmd == "drafts" else args.pairs
     {"drafts": cmd_drafts, "match": cmd_match, "show": cmd_show, "label": cmd_label,
      "score": cmd_score, "clean": cmd_clean}[args.cmd](args)
 
