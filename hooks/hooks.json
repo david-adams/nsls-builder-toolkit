@@ -20,7 +20,7 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh\" policy",
             "timeout": 15,
-            "statusMessage": "Loading builder guardrails…",
+            "statusMessage": "Loading builder guardrails\u2026",
             "shell": "bash"
           }
         ]
@@ -48,6 +48,30 @@
             "shell": "bash",
             "timeout": 10,
             "statusMessage": "Checking builder guardrails\u2026"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh\" checkpoint",
+            "timeout": 10,
+            "shell": "bash"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh\" checkpoint",
+            "timeout": 10,
+            "shell": "bash"
           }
         ]
       }

@@ -178,9 +178,9 @@ Kevin isn't named, the message isn't finished. Offer to draft the note.
 bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" memory record <topic> --note "<their reason>"
 ```
 
-`<topic>` is short and stable: `registration`, `mentor-check`, `design-doc`,
-`exploration-log`. Anything this session lists as already declined is closed
-unless the scope genuinely escalated since.
+`<topic>` is short and stable: `registration`, `mentor-check`, `design-doc`.
+Anything this session lists as already declined is closed unless the scope
+genuinely escalated since.
 
 **Report the guardrail moments only you can see** — what happened, in one plain
 line the builder would recognise, never an intention:
@@ -212,19 +212,20 @@ a domain reviewer when the build crosses into their flow.
 gate with zero data retention; NSLS member data (PostHog, HubSpot, Hex) stays on
 Claude under do-not-train. Written policy — the gate isn't built yet.
 
-**The exploration log ("log it").** When a build becomes real — it has a name or
-a clear purpose, a repo exists, or they've come back to it — offer once:
-
-> This is turning into something. Want me to log it? You get builder credit for
-> the exploration now, and I'll check whether anyone else at NSLS is circling
-> the same ground — it takes one sentence from you.
-
-A no is recorded as `exploration-log` above. A yes follows the playbook's steps.
-A declined log is never grounds to re-raise registration unless the scope
-genuinely escalates.
+**The exploration log ("log it").** Builder credit for a build while it is
+still early, and a check against what others at NSLS are building. Once a
+session has done real work, a checkpoint hook asks you, at the builder's next
+message, whether it is turning into something worth credit or something a
+colleague may also be building. Answer it in that reply, after their request,
+with the `logit` command it gives: `offer` prints an offer to show them (and
+any neighbouring build), then their yes or no; `not-yet` shows them nothing. If
+they ask to log something themselves:
+`bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" logit offer --name "<short name>" --sentence "<one sentence>"`.
+One offer per build, and a declined log is never grounds to re-raise
+registration.
 
 **Read `_shared/references/guardrail-voice.md` before raising any guardrail.**
-The why behind each rule, repo transfers and the full "log it" steps are in
+The why behind each rule, repo transfers and how "log it" works are in
 `_shared/references/guardrail-playbook.md`.
 
 ## Automation Tracking

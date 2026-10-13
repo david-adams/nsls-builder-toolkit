@@ -76,6 +76,12 @@ LABELS = {
     "guardrail_blocked": "a hard gate denied the call",
     "guardrail_authorized": "the authorization route was taken",
     "guardrail_disputed": "the builder says a gate misfired",
+    # The exploration log ("log it"). Signal keeps these OUT of its guardrail
+    # tiles and lists (EXPLORATION_LOG_LABELS in lib/guardrails.ts): an
+    # unanswered offer is not a flag awaiting authorization.
+    "guardrail_logit_offered": "Claude offered to log an early build as an exploration",
+    "guardrail_logit_accepted": "the builder logged it (it is also a guardrail_registered)",
+    "guardrail_logit_declined": "the builder kept it personal; it is not offered again",
 }
 
 # Measured against the live proxy on 2026-08-23, five sequential POSTs to

@@ -271,8 +271,10 @@ after stating it. Instead, offer the **exploration log** once — the light,
 credit-framed row from `${CLAUDE_PLUGIN_ROOT}/_shared/references/guardrail-playbook.md`
 § The exploration log: one sentence, stage
 `Exploring`, no checklist or reviewer questions, decline recorded and never
-re-raised. If they logged one earlier in this conversation, this step is
-already done — say nothing.
+re-raised. Run `bash "${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.sh" logit offer
+--name "<short name>" --sentence "<one sentence>"` and show them what it prints.
+If they logged one earlier in this conversation, this step is already done —
+say nothing.
 
 **Tier 2 and Tier 3 continue below.** Use the `register-automation` skill to
 register or update the automation in Airtable. Map fields:

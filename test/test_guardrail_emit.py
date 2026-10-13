@@ -93,12 +93,15 @@ def main():
     check("an unknown label is refused, not sent",
           "unknown" in g.emit("noticed", "x") and not received,
           f"received={received}")
-    check("the eight labels are exactly the ones Signal counts",
+    # The exploration log's three labels are a second list in Signal
+    # (EXPLORATION_LOG_LABELS), kept out of its guardrail tiles on purpose.
+    LOGIT = {"guardrail_logit_offered", "guardrail_logit_accepted", "guardrail_logit_declined"}
+    check("Signal's eight guardrail labels plus the exploration log's three, nothing else",
           set(g.LABELS) == {
               "guardrail_flagged", "guardrail_registered", "guardrail_mentor",
               "guardrail_migrated", "guardrail_proceeded", "guardrail_blocked",
               "guardrail_authorized", "guardrail_disputed",
-          },
+          } | LOGIT,
           f"got {sorted(g.LABELS)}")
 
     # Cross-repo contract. Skipped when Signal isn't checked out here, but when
@@ -107,13 +110,25 @@ def main():
                   or "/Volumes/SSK Data/Developer/Projects/employee-profiles")
     ts = signal / "lib" / "guardrails.ts"
     if ts.is_file():
-        text = ts.read_text()
-        block = text[text.index("GUARDRAIL_EVENT_LABELS = ["):]
-        block = block[: block.index("]")]
-        theirs = set(__import__("re").findall(r"'(guardrail_\w+)'", block))
-        check("Signal's label list matches ours", theirs == set(g.LABELS),
-              f"only in Signal: {theirs - set(g.LABELS)} | "
-              f"only in toolkit: {set(g.LABELS) - theirs}")
+        text = ts.read_text(encoding="utf-8")
+
+        def signal_list(const):
+            if f"{const} = [" not in text:
+                return None
+            block = text[text.index(f"{const} = ["):]
+            return set(__import__("re").findall(r"'(guardrail_\w+)'", block[: block.index("]")]))
+
+        theirs = signal_list("GUARDRAIL_EVENT_LABELS") or set()
+        ours = set(g.LABELS) - LOGIT
+        check("Signal's guardrail label list matches ours", theirs == ours,
+              f"only in Signal: {theirs - ours} | only in toolkit: {ours - theirs}")
+        explo = signal_list("EXPLORATION_LOG_LABELS")
+        if explo is None:
+            print("  [skip] this Signal checkout predates its exploration-log labels "
+                  "(thensls/employee-profiles#190); until then Signal ignores them")
+        else:
+            check("Signal's exploration-log labels match ours", explo == LOGIT,
+                  f"Signal: {sorted(explo)}")
     else:
         print("  [skip] Signal checkout not present — cross-repo check skipped")
 
@@ -214,6 +229,17 @@ def main():
     g5 = fresh(tmp / "e", good)
     (tmp / "e").mkdir(exist_ok=True)
     g5.SEEN_FILE = tmp / "e" / "seen.json"
+    # The detached child is a separate process: the builder_email patches above
+    # don't reach it, so it resolves the email itself. Give it a test identity.
+    # Without one it borrowed the developer's own git email on a laptop and
+    # found none on a clean CI runner, where nothing was sent (Windows job,
+    # PR #259).
+    child_cfg = tmp / "e" / "cfg"
+    (child_cfg / "local-plugins" / "nsls-personal-toolkit").mkdir(parents=True, exist_ok=True)
+    (child_cfg / "local-plugins" / "nsls-personal-toolkit" / ".env").write_text(
+        "BUILDER_EMAIL=probe.builder@nsls.org\n", encoding="utf-8")
+    saved_cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    os.environ["CLAUDE_CONFIG_DIR"] = str(child_cfg)
     t0 = time.time()
     g5.emit_detached("flagged", "detached probe", dedupe=False)
     elapsed = time.time() - t0
@@ -223,6 +249,10 @@ def main():
         if received:
             break
         time.sleep(0.1)
+    if saved_cfg is None:
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        os.environ["CLAUDE_CONFIG_DIR"] = saved_cfg
     check("and the event still arrives", bool(received),
           "the detached child never delivered")
     if received:
