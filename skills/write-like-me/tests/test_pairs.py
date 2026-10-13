@@ -42,6 +42,16 @@ def fenced(t):
     return text("Draft:\n\n```\n" + t + "\n```")
 
 
+def send(ts, msg, call_id):
+    return row("assistant", ts, [{"type": "tool_use", "id": call_id, "name": "mcp__abc__slack_send_message",
+                                  "input": {"channel_id": "C1", "message": msg}}])
+
+
+def result(ts, call_id, error=False):
+    return row("user", ts, [{"type": "tool_result", "tool_use_id": call_id, "is_error": error,
+                             "content": "The user doesn't want to proceed with this tool use." if error else "ok"}])
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -81,9 +91,8 @@ class EndToEnd(Base):
                 "Another Claude session sent a message: <cross-session-message>ignore</cross-session-message>"),
             row("assistant", "2026-10-10T14:03:00Z", text("Updated:\n\n> " + DRAFT_2.replace("\n", "\n> "))),
             row("assistant", "2026-10-10T14:30:00Z", fenced(REWORK)),
-            row("assistant", "2026-10-10T15:00:00Z", [
-                {"type": "tool_use", "name": "mcp__abc__slack_send_message",
-                 "input": {"channel_id": "C1", "message": POSTED}}]),
+            send("2026-10-10T15:00:00Z", POSTED, "t1"),
+            result("2026-10-10T15:00:02Z", "t1"),
             row("assistant", "2026-10-10T15:05:00Z", text("```bash\npython3 run.py --all --verbose --dry-run now please ok\n```")),
             row("assistant", "2026-10-10T15:06:00Z", text("sidechain draft that should be ignored entirely " * 3),
                 isSidechain=True),
@@ -204,9 +213,8 @@ class Attribution(Base):
         self.session("a", [row("assistant", "2026-10-10T14:00:00Z", fenced(POSTED))])
         self.session("b", [
             row("assistant", "2026-10-10T14:00:00Z", fenced(POSTED)),
-            row("assistant", "2026-10-10T14:05:00Z", [
-                {"type": "tool_use", "name": "mcp__abc__slack_send_message",
-                 "input": {"channel_id": "C1", "message": POSTED}}]),
+            send("2026-10-10T14:05:00Z", POSTED, "t2"),
+            result("2026-10-10T14:05:02Z", "t2"),
         ])
         by_id, _ = self.run_all([{"id": "poll", "source": "slack",
                                   "time": "2026-10-10T10:06:00-04:00", "text": POSTED}])
@@ -264,6 +272,16 @@ class Attribution(Base):
         by_id, _ = self.run_all([{"id": "sam", "source": "slack",
                                   "time": "2026-10-10T11:00:00-04:00", "text": SENT}])
         self.assertEqual([c["text"] for c in by_id["sam"]["corrections"]], ["One sentence per line."])
+
+    def test_a_denied_send_is_not_a_post(self):
+        self.session("s", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(POSTED)),
+            send("2026-10-10T14:01:00Z", POSTED, "t9"),
+            result("2026-10-10T14:01:05Z", "t9", error=True),
+        ])
+        by_id, _ = self.run_all([{"id": "poll", "source": "slack",
+                                  "time": "2026-10-10T10:20:00-04:00", "text": POSTED}])
+        self.assertEqual(by_id["poll"]["status"], "matched", "the person posted it themselves")
 
     def test_one_reply_to_several_drafts_counts_for_each(self):
         self.session("s", [

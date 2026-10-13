@@ -223,6 +223,7 @@ def sends_in(part):
 
 def read_session(path, start, end):
     events = []
+    attempted = {}   # send tool call id -> (time, texts), until its result arrives
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
@@ -236,6 +237,14 @@ def read_session(path, start, end):
                 continue
             content = (row.get("message") or {}).get("content")
             if row["type"] == "user":
+                # A send counts only once its result comes back without an error:
+                # a send the person denied, or that failed, posted nothing.
+                for part in content if isinstance(content, list) else []:
+                    if (isinstance(part, dict) and part.get("type") == "tool_result"
+                            and part.get("tool_use_id") in attempted):
+                        sent_at, texts = attempted.pop(part["tool_use_id"])
+                        if not part.get("is_error"):
+                            events += [("sent", sent_at, text) for text in texts]
                 text = user_text(content)
                 if text:
                     events.append(("user", ts, text))
@@ -246,8 +255,9 @@ def read_session(path, start, end):
                     drafts = drafts_in(part)
                     for via, text in drafts:
                         events.append(("draft", ts, (via, text)))
-                    for text in sends_in(part):
-                        events.append(("sent", ts, text))
+                    texts = sends_in(part)
+                    if texts:
+                        attempted[part.get("id")] = (ts, texts)
                     if part.get("type") == "text" and part.get("text", "").strip() and not drafts:
                         events.append(("reply", ts, None))   # Claude answered without a draft
     return events
