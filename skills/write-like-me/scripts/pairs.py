@@ -243,10 +243,13 @@ def read_session(path, start, end):
                 for part in content:
                     if not isinstance(part, dict):
                         continue
-                    for via, text in drafts_in(part):
+                    drafts = drafts_in(part)
+                    for via, text in drafts:
                         events.append(("draft", ts, (via, text)))
                     for text in sends_in(part):
                         events.append(("sent", ts, text))
+                    if part.get("type") == "text" and part.get("text", "").strip() and not drafts:
+                        events.append(("reply", ts, None))   # Claude answered without a draft
     return events
 
 
@@ -288,6 +291,11 @@ def pieces_in(events, label):
             for p in batch:
                 pending.setdefault(p["id"], []).append({"time": ts.isoformat(), "text": payload[:2000]})
             batch_open = False
+        elif kind == "reply" and not batch_open:
+            # Claude answered the person without showing a draft, so what they
+            # type next is about that answer, not the earlier drafts. (Closing
+            # text in the same turn as a draft, before they type, changes nothing.)
+            batch = []
         elif kind == "sent":
             words = wordset(payload)
             for p in pieces:

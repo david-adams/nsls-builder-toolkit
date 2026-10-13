@@ -242,6 +242,29 @@ class Attribution(Base):
             self.assertNotEqual(out.returncode, 0, args)
             self.assertFalse((self.dir / "x.json").exists())
 
+    def test_a_message_after_an_unrelated_answer_is_not_a_correction(self):
+        self.session("s", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(DRAFT_1)),
+            row("user", "2026-10-10T14:01:00Z", "No exclamation marks."),
+            row("assistant", "2026-10-10T14:02:00Z", text("The board meets on Thursday, by the way.")),
+            row("user", "2026-10-10T14:03:00Z", "What time on Thursday?"),
+            row("assistant", "2026-10-10T14:04:00Z", fenced(DRAFT_2)),
+        ])
+        by_id, _ = self.run_all([{"id": "sam", "source": "slack",
+                                  "time": "2026-10-10T11:00:00-04:00", "text": SENT}])
+        self.assertEqual([c["text"] for c in by_id["sam"]["corrections"]], ["No exclamation marks."])
+
+    def test_closing_text_after_a_draft_keeps_the_next_reply(self):
+        self.session("s", [
+            row("assistant", "2026-10-10T14:00:00Z", fenced(DRAFT_1)),
+            row("assistant", "2026-10-10T14:00:05Z", text("Want me to change anything?")),
+            row("user", "2026-10-10T14:01:00Z", "One sentence per line."),
+            row("assistant", "2026-10-10T14:02:00Z", fenced(DRAFT_2)),
+        ])
+        by_id, _ = self.run_all([{"id": "sam", "source": "slack",
+                                  "time": "2026-10-10T11:00:00-04:00", "text": SENT}])
+        self.assertEqual([c["text"] for c in by_id["sam"]["corrections"]], ["One sentence per line."])
+
     def test_one_reply_to_several_drafts_counts_for_each(self):
         self.session("s", [
             row("assistant", "2026-10-10T14:00:00Z", text("Two drafts:\n\n```\n" + DRAFT_1 + "\n```\n\n```\n" + OTHER + "\n```")),
