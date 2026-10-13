@@ -212,6 +212,35 @@ class Attribution(Base):
                                   "time": "2026-10-10T10:06:00-04:00", "text": POSTED}])
         self.assertEqual(by_id["poll"]["status"], "posted by Claude")
 
+    def test_reshown_draft_counts_from_its_latest_showing(self):
+        self.session("s", [
+            row("assistant", "2026-09-30T14:00:00Z", fenced(DRAFT_1)),
+            row("user", "2026-10-04T13:59:00Z", "Show me that note again."),
+            row("assistant", "2026-10-04T14:00:00Z", fenced(DRAFT_1)),
+        ])
+        by_id, _ = self.run_all([{"id": "sam", "source": "slack", "time": "2026-10-16T10:00:00-04:00",
+                                  "text": DRAFT_1}], start="2026-10-01", end="2026-10-16")
+        self.assertEqual(by_id["sam"]["status"], "matched", "shown again 12 days before sending")
+        self.assertEqual(by_id["sam"]["versions"], 1, "an unchanged re-showing is not a new version")
+
+    def test_grouping_gap_counts_from_the_latest_showing(self):
+        self.session("s", [
+            row("assistant", "2026-09-25T14:00:00Z", fenced(DRAFT_1)),
+            row("assistant", "2026-09-29T14:00:00Z", fenced(DRAFT_1)),
+            row("user", "2026-10-03T13:59:00Z", "One sentence per line, no exclamation marks."),
+            row("assistant", "2026-10-03T14:00:00Z", fenced(DRAFT_2)),
+        ])
+        by_id, _ = self.run_all([{"id": "sam", "source": "slack", "time": "2026-10-03T11:00:00-04:00",
+                                  "text": SENT}], start="2026-10-01", end="2026-10-03")
+        self.assertEqual(by_id["sam"]["versions"], 2, "8 days after the first showing, 4 after the last")
+
+    def test_match_creates_its_output_folder(self):
+        self.cli("drafts", "--start", "2026-10-09", "--end", "2026-10-11")
+        (self.dir / "work" / "finals.json").write_text("[]", encoding="utf-8")
+        out = self.dir / "elsewhere" / "new" / "pairs.json"
+        self.cli("match", "--out", str(out))
+        self.assertTrue(out.is_file())
+
     def test_one_reply_to_several_drafts_counts_for_each(self):
         self.session("s", [
             row("assistant", "2026-10-10T14:00:00Z", text("Two drafts:\n\n```\n" + DRAFT_1 + "\n```\n\n```\n" + OTHER + "\n```")),
@@ -258,6 +287,17 @@ class Measures(unittest.TestCase):
                 pairs.add_piece(pieces, seen, piece(has_send))
             self.assertEqual(len(pieces), 1)
             self.assertEqual(len(pieces[0]["sends"]), 1, f"order {order}")
+
+    def test_merging_copies_keeps_every_showing(self):
+        a = {"versions": [{"time": "2026-10-01T14:00:00+00:00", "shown": ["2026-10-01T14:00:00+00:00"],
+                           "text": POSTED}], "sends": []}
+        b = {"versions": [{"time": "2026-10-01T14:00:00+00:00",
+                           "shown": ["2026-10-01T14:00:00+00:00", "2026-10-09T14:00:00+00:00"],
+                           "text": POSTED}], "sends": []}
+        pieces, seen = [], {}
+        pairs.add_piece(pieces, seen, a)
+        pairs.add_piece(pieces, seen, b)
+        self.assertEqual(pieces[0]["versions"][0]["shown"][-1], "2026-10-09T14:00:00+00:00")
 
     def test_recency_tie_break_compares_real_times(self):
         same = "The plan for the spring term is ready for your review this week, thanks."

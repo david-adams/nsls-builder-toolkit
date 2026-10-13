@@ -261,16 +261,19 @@ def pieces_in(events, label):
             best, best_score = None, 0.0
             for p in pieces:
                 prev = p["versions"][-1]
-                if ts - parse_time(prev["time"]) > timedelta(hours=GROUP_HOURS):
+                if ts - max(shown_times(prev)) > timedelta(hours=GROUP_HOURS):
                     continue
                 score = overlap(words, wordset(prev["text"]))
                 if score > best_score:
                     best, best_score = p, score
-            version = {"time": ts.isoformat(), "via": via, "text": text}
+            version = {"time": ts.isoformat(), "shown": [ts.isoformat()], "via": via, "text": text}
             if best is not None and best_score >= SAME_PIECE:
-                if text.strip() != best["versions"][-1]["text"].strip():
+                last = best["versions"][-1]
+                if text.strip() != last["text"].strip():
                     version["corrections_before"] = pending.pop(best["id"], [])
                     best["versions"].append(version)
+                else:   # shown again unchanged: the same version, seen more recently
+                    last.setdefault("shown", [last["time"]]).append(ts.isoformat())
             else:
                 version["corrections_before"] = []
                 best = {"id": f"{label}#{len(pieces) + 1}", "versions": [version], "sends": []}
@@ -304,6 +307,10 @@ def add_piece(pieces, seen, piece):
         return
     keep, drop = (piece, twin) if len(piece["versions"]) > len(twin["versions"]) else (twin, piece)
     keep["sends"] += [s for s in drop["sends"] if s not in keep["sends"]]
+    for kv, dv in zip(keep["versions"], drop["versions"]):   # and every showing
+        if kv["text"].strip() == dv["text"].strip():
+            kv["shown"] = sorted(set(kv.get("shown", [kv["time"]]) + dv.get("shown", [dv["time"]])),
+                                 key=parse_time)
     if keep is piece:
         pieces[pieces.index(twin)] = seen[key] = piece
 
@@ -333,11 +340,21 @@ def cmd_drafts(args):
 
 # ---------- matching finals ----------
 
-def in_window(version, sent_at):
+def shown_times(version):
+    """Every time Claude showed this version (or sent it), oldest first."""
+    return [parse_time(t) for t in version.get("shown") or [version["time"]]]
+
+
+def times_in_window(version, sent_at):
+    """The showings that could have been the source of something sent at sent_at."""
+    times = shown_times(version)
     if not sent_at:
-        return True
-    vt = parse_time(version["time"])
-    return sent_at - timedelta(days=MAX_DAYS) <= vt <= sent_at + timedelta(minutes=2)
+        return times
+    return [t for t in times if sent_at - timedelta(days=MAX_DAYS) <= t <= sent_at + timedelta(minutes=2)]
+
+
+def in_window(version, sent_at):
+    return bool(times_in_window(version, sent_at))
 
 
 def best_version(piece, words, sent_at):
@@ -349,7 +366,7 @@ def best_version(piece, words, sent_at):
 def closeness(piece, text, words, sent_at):
     """How alike in wording (then how recent) this piece's best version is."""
     final = tokens(text)
-    return max(((ratio(tokens(v["text"]), final), parse_time(v["time"])) for v in piece["versions"]
+    return max(((ratio(tokens(v["text"]), final), max(times_in_window(v, sent_at))) for v in piece["versions"]
                 if in_window(v, sent_at) and overlap(words, wordset(v["text"])) >= MATCH),
                default=(0.0, datetime.min.replace(tzinfo=timezone.utc)))
 
@@ -394,6 +411,7 @@ def cmd_match(args):
             "hunks": hunks(first["text"], text),
         })
         rows.append(row)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(rows, fh, ensure_ascii=False, indent=1)
     for n, r in enumerate(rows, 1):
