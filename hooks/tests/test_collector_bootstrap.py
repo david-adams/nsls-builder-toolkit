@@ -411,9 +411,13 @@ def test_stale_lock_takeover_never_steals_a_live_lock(box):
     old = time.time() - 1800
     os.utime(lock, (old, old))
     stale_ino = lock.stat().st_ino
-    # A replaces it with a live lock between B's stat and B's rename.
-    lock.unlink()
-    lock.write_text("")
+    # A replaces it with a live lock between B's stat and B's rename. Written
+    # beside the old one and renamed over it, so both exist at once and the
+    # filesystem can't hand the stale inode straight back: Linux reuses a freed
+    # inode immediately (macOS happens not to), which failed this on CI.
+    live = lock.with_name("bootstrap.lock.new")
+    live.write_text("")
+    os.replace(live, lock)
     assert lock.stat().st_ino != stale_ino
     assert cb._take_over_stale(lock, stale_ino) is False
     assert lock.exists(), "the live lock must be put back"
