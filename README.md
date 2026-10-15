@@ -272,16 +272,6 @@ On **Windows**, those producers (`python3`/`bash`) don't run; `install.ps1`
 registers a PowerShell `PreToolUse` hook (`hooks/skill-event.ps1`) plus the
 session ping (`hooks/session-start.ps1`) so Windows builders are covered too.
 
-### Opt out
-
-Set `BUILDER_EMAIL=""` in `~/.claude/local-plugins/nsls-personal-toolkit/.env`.
-Both producers check this value before pinging; an empty email disables them
-both, permanently, with no other side effects.
-
-Editing `hooks/hooks.json` to remove the `PreToolUse` block doesn't work as a
-durable opt-out — the file is overwritten on the next `git pull` of the
-toolkit. Empty `BUILDER_EMAIL` is the canonical path.
-
 ### Known limitations
 
 - **Tracking only fires for builders whose `BUILDER_EMAIL` is set.** Running
@@ -300,8 +290,10 @@ toolkit. Empty `BUILDER_EMAIL` is the canonical path.
 
 ## Claude Usage Reporter (collector)
 
-The NSLS Claude usage collector reports session counts and skill names from
-this machine to Signal. It never reports prompts, responses or files. You can
+The NSLS Claude usage collector reports a summary of each session (for
+example the app, models, timing, token counts, skill and tool names, and
+branch name) from this machine to Signal. It never reports prompts,
+responses or files. You can
 see what it has sent at [signal.nsls.org/me/machines](https://signal.nsls.org/me/machines).
 
 **Installed for you.** When a session starts on a Mac or a Windows PC and
@@ -332,24 +324,6 @@ credit and skill events there, so the toolkit's skill hook stops posting and
 the session ping sends `collector_backed: true`. If the collector stops
 reporting for 7 days, the hooks take over again on their own
 (`hooks/collector_evidence.py`).
-
-### Opt out
-
-Set `NSLS_COLLECTOR_OPTOUT=1` in your environment (your shell profile on a
-Mac, or `setx NSLS_COLLECTOR_OPTOUT 1` on Windows). Nothing is installed and
-nothing is written. This only stops the automatic install. It doesn't remove
-a collector that's already installed.
-
-### Uninstall
-
-**Set `NSLS_COLLECTOR_OPTOUT=1` first.** Otherwise the toolkit installs the
-collector again at a later session start, since once it's removed there's
-nothing left to show it was ever there. Then run:
-
-- **Mac:** `curl -fsSL https://signal.nsls.org/api/collector/dist/uninstall.sh | bash`
-- **Windows:** `iwr -UseBasicParsing https://signal.nsls.org/api/collector/dist/uninstall.ps1 | iex`
-
-These remove the collector's schedule, its folder and its evidence file.
 
 ## Request a Skill
 
