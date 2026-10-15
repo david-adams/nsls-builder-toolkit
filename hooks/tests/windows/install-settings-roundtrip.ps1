@@ -1,3 +1,4 @@
+# windows-ci: ps51 | install.ps1 gives settings.json back as it found it (accents, a builder's own hooks, a copy, no torn write)
 # install.ps1 rewrites settings.json; this proves, under Windows PowerShell 5.1,
 # that it gives back what it found:
 #   1. non-ASCII text survives a re-run (5.1 reads a BOM-less file as ANSI

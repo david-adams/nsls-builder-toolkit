@@ -168,6 +168,14 @@ PII_PATTERNS = [
     ("[number]", re.compile(r"\b\d{7,}\b")),
 ]
 TOKEN = re.compile(r"[A-Za-z0-9_\-]{25,}")
+URL = re.compile(r"(https?://)(?:[^\s/?#@\"'<>)\]]*@)?(\[[^\]\s]+\](?::\d+)?|[^\s/?#\"'<>)\]]+)[^\s\"'<>)\]]*", re.IGNORECASE)
+SLACK_ID = re.compile(r"\b[UWFCDGT](?=[A-Z0-9]*\d[A-Z0-9]*\d)[A-Z0-9]{8,11}\b")
+
+
+def _link(m):
+    """A link keeps its scheme and host only: paths, queries, fragments and logins carry ids."""
+    kept = m.group(1) + m.group(2)
+    return kept + "/…" if m.group(0) not in (kept, kept + "/") else kept
 
 
 def _long_id(m):
@@ -184,8 +192,10 @@ def mask(text, flags=None):
             if flags is not None:
                 flags.add(name)
             text = pat.sub("[REDACTED:%s]" % name, text)
+    text = URL.sub(_link, text)
     for label, pat in PII_PATTERNS:
         text = pat.sub(label, text)
+    text = SLACK_ID.sub("[id]", text)
     return TOKEN.sub(_long_id, text)
 
 
@@ -405,7 +415,7 @@ def blank_session(surface, sid):
     }
 
 
-def ingest_line(s, o, since, seen=None):
+def ingest_line(s, o, since, seen=None, until=None):
     """Fold one JSONL record into session s. Only timestamped records inside the window count.
     seen holds record ids already read: moving a session to another folder copies its history
     into a new file with the same ids, and each record should count once."""
@@ -424,6 +434,8 @@ def ingest_line(s, o, since, seen=None):
     if ts < since:
         s["earlier"] = True  # the session started before this window: only its new part is read
         return
+    if until is not None and ts >= until:
+        return  # written after this scan began: the next check-in reads it, so it never counts twice
     if seen is not None and o.get("uuid"):
         if o["uuid"] in seen:
             s["copies"] += 1
@@ -466,17 +478,17 @@ def ingest_line(s, o, since, seen=None):
     if kind == "interrupt":
         s["interruptions"] += 1
         return
+    own, removed = strip_blocks(clean, "<pasted_content", "</pasted_content")
     if kind == "command":
-        if is_self_command(clean):
+        if is_self_command(own):
             s["is_self"] = True
-        s["commands"].append(clip(mask(clean, s["secret_flags"]), 120))
+        s["commands"].append(clip(mask(own, s["secret_flags"]), 120))
     elif not s["turns"]:
         head = clean[:4000]
         if head.startswith(SCHEDULED_PREFIX) or (head.startswith("<scheduled-task") and SCHEDULED_PREFIX in head):
             s["is_self"] = True  # a scheduled check-in, wrapped or not
         elif head.startswith("<scheduled-task"):  # the desktop app wraps every scheduled run in this tag
             s["automated"], s["automation_reason"] = True, "scheduled task"
-    own, removed = strip_blocks(clean, "<pasted_content", "</pasted_content")
     turn = {"t": ts.isoformat(), "kind": kind, "text": clip(mask(own, s["secret_flags"]))}
     if removed:
         # pasted text may be someone else's words: only its size is kept
@@ -486,13 +498,13 @@ def ingest_line(s, o, since, seen=None):
     s["turns"].append(turn)
 
 
-def read_jsonl(path, s, since):
+def read_jsonl(path, s, since, until=None):
     """Fold a transcript into s; False if the file could not be read."""
     try:
         with open(path, encoding="utf-8", errors="ignore") as fh:
             for line in fh:
                 try:
-                    ingest_line(s, json.loads(line), since)
+                    ingest_line(s, json.loads(line), since, until=until)
                 except ValueError:
                     continue
         return True
@@ -521,7 +533,7 @@ def scheduled_prompts():
     return prompts
 
 
-def scan_code(since, notes):
+def scan_code(since, notes, until=None):
     root = code_root()
     if not os.path.isdir(root):
         return None, []
@@ -547,7 +559,7 @@ def scan_code(since, notes):
                         continue
                     if entry is None and isinstance(o, dict) and o.get("entrypoint"):
                         entry = o["entrypoint"]
-                    ingest_line(s, o, since, seen)
+                    ingest_line(s, o, since, seen, until)
         except OSError:
             unreadable += 1
             continue
@@ -576,7 +588,7 @@ def known_email(cfg):
     return None
 
 
-def scan_cowork(since, notes, email):
+def scan_cowork(since, notes, email, until=None):
     root = cowork_root()
     if not root:
         return None, []
@@ -585,13 +597,16 @@ def scan_cowork(since, notes, email):
         meta = load_json(meta_path, None)
         if isinstance(meta, dict):
             metas.append((meta_path, meta))
-    accounts = {str(m.get("emailAddress")).lower() for _, m in metas if m.get("emailAddress")}
-    if accounts and (len(accounts) > 1 or email):
-        if not email or email.lower() not in accounts:
-            notes.append("cowork: %s, and none confirmed as yours; Cowork skipped (say 'my work email is …' to include it)"
-                         % ("several Claude accounts on this computer" if len(accounts) > 1 else "the Cowork account here isn't your work email"))
-            return root, []
-        metas = [(p, m) for p, m in metas if str(m.get("emailAddress")).lower() == email.lower()]
+    # read a Cowork session only when its account positively matches the person's work email
+    mine = [(p, m) for p, m in metas if email and str(m.get("emailAddress") or "").lower() == email.lower()]
+    if metas and not mine:
+        accounts = {str(m.get("emailAddress")).lower() for _, m in metas if m.get("emailAddress")}
+        why = ("several Claude accounts on this computer, and none confirmed as yours" if len(accounts) > 1 else
+               "no work email is known yet" if not email else
+               "the Cowork account here isn't your work email" if accounts else "its sessions don't say whose they are")
+        notes.append("cowork: %s, so Cowork was skipped (say 'my work email is …' to include it)" % why)
+        return root, []
+    metas = mine
     out, unreadable = [], 0
     for meta_path, meta in metas:
         last = parse_ts(meta.get("lastActivityAt") or meta.get("createdAt"))
@@ -607,7 +622,7 @@ def scan_cowork(since, notes, email):
             s["project"] = safe(os.path.basename(str(folders[0]).rstrip("/\\")), 60)
         if meta.get("scheduledTaskId"):
             s["automated"], s["automation_reason"] = True, "scheduled task"
-        if not read_jsonl(audit, s, since):
+        if not read_jsonl(audit, s, since, until):
             unreadable += 1
             continue
         out.append(finish(s))
@@ -993,7 +1008,7 @@ def habits_section(r, n_tasks):
             title, len(items), '<p class="soft hb-sub">%s</p>' % sub if sub else "", AXIS,
             "".join(habit_row(x, prev, notes, x["i"] in big) for x in items))
     legend = ('<div class="legend"><span><span class="key" style="background:var(--you)"></span>You</span>'
-              '<span><span class="key" style="background:var(--typical)"></span>Typical: share of chats showing the habit in Anthropic\'s study</span></div>'
+              '<span><span class="key" style="background:var(--typical)"></span>Typical: share of claude.ai chats showing the habit in Anthropic\'s study. A guide, not a grade</span></div>'
               '<p class="soft hb-how">Click a habit to see what it means, with an example. Hover over your bar to see the count.</p>')
     body = (legend + group("Ahead of typical", "", ahead)
             + group("Habits to improve", "Below typical by %d points or more, biggest gap first." % NEAR, grow)
@@ -1168,7 +1183,9 @@ def tiles(r):
             change = '<div class="was">%s from %d of %d last time</div>' % (mark, was[0], was[1])
         more = ""
         if key == "habits_ahead" and y > x:
-            more = '<a class="tile-link" href="#habits">See the %d you could improve →</a>' % (y - x)
+            _, grow, par = habit_groups(habit_rows(r))
+            parts = [p for p in ("%d to improve" % len(grow) if grow else "", "%d about typical" % len(par) if par else "") if p]
+            more = '<a class="tile-link" href="#habits">%s →</a>' % esc(" · ".join(parts).capitalize())
         out.append('<div class="tile"><span class="eyebrow">%s</span><div class="big num">%d<small> of %d</small></div>'
                    '<div class="what">%s</div>%s%s</div>' % (esc(eyebrow), x, y, esc(what), change, more))
     return '<div class="tiles">%s</div>' % "".join(out) if out else ""
@@ -1351,11 +1368,11 @@ def open_file(path):
 
 # ---------------------------------------------------------------- commands
 
-def gather(since, email, notes):
+def gather(since, email, notes, until=None):
     """{surface: (root or None, sessions not made by this skill)}; self-runs noted."""
     found = {}
     for name in ("code", "cowork"):
-        root, sessions = scan_code(since, notes) if name == "code" else scan_cowork(since, notes, email)
+        root, sessions = scan_code(since, notes, until) if name == "code" else scan_cowork(since, notes, email, until)
         mine = [s for s in sessions if not s["is_self"]]
         if len(sessions) != len(mine):
             notes.append("%s: set aside %d of this skill's own runs" % (name, len(sessions) - len(mine)))
@@ -1374,7 +1391,7 @@ def cmd_scan(args):
         cut = parse_ts((previous or {}).get("covered_to"))
         if cut and cut < now:
             basis, since, since_checkin = "since-last", cut, cut.date().isoformat()
-            found = gather(since, email, notes)
+            found = gather(since, email, notes, now)
         else:
             notes.append("no earlier check-in on record, so this is a fresh check-in")
     if found is None:  # fresh: widen the window until there are enough sessions to read
@@ -1382,7 +1399,7 @@ def cmd_scan(args):
         for days in windows:
             notes_now = []
             since = now - dt.timedelta(days=days)
-            found = gather(since, email, notes_now)
+            found = gather(since, email, notes_now, now)
             if sum(len(readable(ss)) for _, ss in found.values()) >= args.max_per_surface:
                 break
         notes.extend(notes_now)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | The installed-skills neighbour check ignores one shared common word, and still finds a real neighbour
 """The installed-skills duplicate check.
 
 Run: python3 test/test_similar_skills.py

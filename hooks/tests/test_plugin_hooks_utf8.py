@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | The plugin hooks speak UTF-8 on a Windows pipe (policy printed whole, gate reads accented paths and emoji)
 """The plugin's Python hooks speak UTF-8 on a Windows pipe.
 
 Plain stdlib: `python3 hooks/tests/test_plugin_hooks_utf8.py`.

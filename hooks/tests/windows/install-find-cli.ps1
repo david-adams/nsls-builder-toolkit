@@ -1,3 +1,4 @@
+# windows-ci: ps51 | install.ps1 finds the claude CLI a Store-installed Claude app hides
 # install.ps1's claude CLI search, run for real under Windows PowerShell 5.1.
 # The Store app's CLI lives under %LOCALAPPDATA%\Packages\Claude_*\LocalCache,
 # because a Store install hides %APPDATA%\Claude from every other process. The

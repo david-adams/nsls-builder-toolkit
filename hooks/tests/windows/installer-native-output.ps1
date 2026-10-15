@@ -1,3 +1,4 @@
+# windows-ci: ps51 ps7 | The installer shows git's own error text, not a PowerShell error dump
 # install.ps1's Invoke-Native must hand back git's own words, not a PowerShell
 # error dump. Under Windows PowerShell 5.1, `2>&1 | Out-String` renders each
 # stderr line as a NativeCommandError record ("+ CategoryInfo ..."), and a failed

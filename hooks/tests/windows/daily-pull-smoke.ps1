@@ -1,3 +1,4 @@
+# windows-ci: ps51 | The daily update keeps ignored files, neutralises merge settings, runs no hooks, and leaves an operation in progress alone
 # The daily update's guards, on a real PC. Update-Checkout and the helpers it
 # calls are lifted out of session-start.ps1 by AST (its top level pulls and
 # pings, so it is never dot-sourced) and pointed at a throwaway world: NSLS as a

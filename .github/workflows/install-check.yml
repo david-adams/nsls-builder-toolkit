@@ -1,0 +1,48 @@
+name: install-check
+
+# Installing a branch must install that branch: the clone (hooks) and the plugin
+# (skills) both. Runs the PR's own installers on a fresh Mac and a fresh PC,
+# main first and then the PR's branch on top, the way a tester's machine sees it.
+on:
+  pull_request:
+    paths:
+      - 'install.sh'
+      - 'install.ps1'
+      - '.github/scripts/install_check.py'
+      - '.github/workflows/install-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  install-check:
+    name: a branch install installs the branch (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      HEAD_REPO: ${{ github.event.pull_request.head.repo.clone_url }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # Install events go nowhere: a test runner must not register as a builder.
+      NSLS_TRACKER_URL: http://127.0.0.1:9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Claude Code CLI (no login needed to install plugins)
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install main, then this branch on top
+        shell: bash
+        run: |
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/kit"
+          python .github/scripts/install_check.py

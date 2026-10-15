@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | Stage B retires only exact toolkit pointers and never deletes a builder skill, on a real PC
 """Stage B retires only exact toolkit pointers, and never deletes anything.
 
 Plain stdlib: `python3 hooks/tests/test_stage_b_keeps_builder_skills.py`.

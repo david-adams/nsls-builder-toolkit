@@ -12,6 +12,7 @@ on:
       - 'CLAUDE.md'
       - '_shared/references/guardrail-*.md'
       - '.github/workflows/windows-hooks.yml'
+      - 'test/**'
   push:
     branches: [main]
     paths:
@@ -20,6 +21,7 @@ on:
       - 'CLAUDE.md'
       - '_shared/references/guardrail-*.md'
       - '.github/workflows/windows-hooks.yml'
+      - 'test/**'
 
 permissions:
   contents: read
@@ -34,84 +36,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Parse every hook script under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/parse-hooks.ps1
-      - name: The skill-event hook proves itself from a Windows path, so stage B can finish on a PC
+      # Each test marks itself with a `# windows-ci:` line (see the runner's docstring), so a
+      # PR that adds a test never edits this file and open PRs can't conflict in it. The runner
+      # runs PowerShell scripts the way a `shell: powershell` / `pwsh` step would, runs every test
+      # even after a failure, and groups each one's output in the log.
+      - name: Every test marked for the Windows CI (PowerShell 5.1, PowerShell 7 and Python)
         shell: pwsh
-        run: python hooks/tests/test_skill_event_beacon_windows.py
-      - name: Parse every hook script under PowerShell 7
-        shell: pwsh
-        run: ./hooks/tests/windows/parse-hooks.ps1
-      - name: install.ps1 finds the claude CLI a Store-installed Claude app hides, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/install-find-cli.ps1
-      - name: The hook's Python step runs, and says so when it cannot, under the exact settings.json command (PS 5.1)
-        shell: powershell
-        run: ./hooks/tests/windows/shim-python-step.ps1
-      - name: install.ps1 gives settings.json back as it found it (accents, a builder's own hooks, a copy, no torn write), under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/install-settings-roundtrip.ps1
-      - name: One holder at a time, PowerShell and Python, on a real PC
-        shell: pwsh
-        run: ./hooks/tests/windows/lock-smoke.ps1
-      - name: install.ps1 counts Git Bash wherever Claude Code finds it, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/install-git-bash.ps1
-      - name: Collector evidence silences the skill hook, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/collector-evidence.ps1
-      - name: The hook makes the personal toolkit's old pull entry safe from a git hook's variables, and touches nothing else (PS 5.1)
-        shell: powershell
-        run: ./hooks/tests/windows/personal-pull-upgrade.ps1
-      - name: The session that updates the hook runs the new copy, not the old one, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/rerun-after-update.ps1
-      - name: A clean fork catches itself up; nothing of theirs, no operation in progress, no merge setting or hook changes that, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/fork-ff-smoke.ps1
-      - name: Once the plugin is active the hook stops writing org pointers but still notices the builder's own skills, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/pointers-after-plugin.ps1
-      - name: The daily update keeps ignored files, neutralises merge settings, runs no hooks, and leaves an operation in progress alone, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/daily-pull-smoke.ps1
-      - name: install.ps1 asks the plugin which hooks it already runs, and ignores a disabled plugin, under Windows PowerShell 5.1
-        shell: powershell
-        run: ./hooks/tests/windows/install-beacon-answer.ps1
-      - name: Collector bootstrap launches once, hidden, and stays out when installed or opted out (PS 5.1)
-        shell: powershell
-        run: ./hooks/tests/windows/collector-bootstrap.ps1
-      - name: Stage B retires only exact toolkit pointers and never deletes a builder skill, on a real PC
-        shell: pwsh
-        run: python hooks/tests/test_stage_b_keeps_builder_skills.py
-      - name: A push through the PowerShell tool is judged by PowerShell's rules, on a real PC
-        shell: pwsh
-        run: python hooks/tests/test_gate_powershell_paths.py
-      - name: A repo with a .personal-repo file is not blocked as NSLS work in a personal repo, on a real PC
-        shell: pwsh
-        run: python hooks/tests/test_gate_personal_marker.py
-      - name: The installer shows git's own error text, not a PowerShell error dump (PS 5.1)
-        shell: powershell
-        run: ./hooks/tests/windows/installer-native-output.ps1
-      - name: The installer shows git's own error text (PowerShell 7)
-        shell: pwsh
-        run: ./hooks/tests/windows/installer-native-output.ps1
-      - name: A builder's no is remembered outside a git repo too (keyed by folder)
-        shell: pwsh
-        run: python hooks/tests/test_guardrail_memory_folders.py
-      - name: The plugin hooks speak UTF-8 on a Windows pipe (policy printed whole, gate reads accented paths and emoji)
-        shell: pwsh
-        run: python hooks/tests/test_plugin_hooks_utf8.py
-      - name: The exploration log checkpoint asks once real work is done, never twice a session, and records every answer
-        shell: pwsh
-        run: python hooks/tests/test_logit_checkpoint.py
-      - name: Guardrail event labels match Signal's two lists
-        shell: pwsh
-        run: python test/test_guardrail_emit.py
-      - name: The guardrail policy reaches Claude whole (under the hook-output cap, its own hook on clear and compact, no bare python3)
-        shell: pwsh
-        run: python hooks/tests/test_guardrail_policy_budget.py
-      - name: The installed-skills neighbour check ignores one shared common word, and still finds a real neighbour
-        shell: pwsh
-        run: python test/test_similar_skills.py
+        run: python hooks/tests/run_windows_ci.py

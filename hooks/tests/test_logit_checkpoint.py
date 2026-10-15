@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | The exploration log checkpoint asks once real work is done, never twice a session, and records every answer
 """The exploration log's checkpoint asks at the right moment, once, and records
 every answer.
 

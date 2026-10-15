@@ -1,3 +1,4 @@
+# windows-ci: ps7 | One holder at a time, PowerShell and Python, on a real PC
 # The fork-check lock on a real PC. Claim-Lock and Release-Lock are lifted out
 # of session-start.ps1 by AST (its top level pulls and pings, so it is never
 # dot-sourced) and proven to admit one holder at a time: PowerShell against

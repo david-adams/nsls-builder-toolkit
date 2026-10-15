@@ -156,8 +156,8 @@ for hook in ("session-start", "skill-event", "guardrail-gate"):
 check("skips the org pointers once session-start is proven",
       "$pointerSources = if ($Proven -contains 'session-start') { @() }" in ps)
 check("restores CLAUDE_CONFIG_DIR after asking", "finally { $env:CLAUDE_CONFIG_DIR = $savedCfg }" in ps)
-check("and Windows CI runs Get-BeaconAnswer for real under PS 5.1",
-      "install-beacon-answer.ps1" in (REPO / ".github" / "workflows" / "windows-hooks.yml").read_text())
+import run_windows_ci  # noqa: E402  (beside this file; reads the `# windows-ci:` markers)
+check("and Windows CI runs Get-BeaconAnswer for real under PS 5.1", "ps51" in run_windows_ci.lanes("install-beacon-answer.ps1"))
 check("skips user-scope MCP registration once the plugin is installed",
       "$PluginInstalled = (@(Get-BeaconAnswer '--installed') -contains 'installed')" in ps
       and "if ($PluginInstalled) {" in ps)

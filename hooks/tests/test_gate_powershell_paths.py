@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | A push through the PowerShell tool is judged by PowerShell's rules, on a real PC
 """A push through the PowerShell tool is judged with PowerShell's rules.
 
 Plain stdlib: `python3 hooks/tests/test_gate_powershell_paths.py`.

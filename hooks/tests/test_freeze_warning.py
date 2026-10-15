@@ -59,6 +59,11 @@ def make_pair(tmp):
     upstream = Path(tmp) / "upstream.git"
     upstream.mkdir()
     git(upstream, "init", "--quiet", "--bare")
+    # Name the branch the seed pushes. A bare repo's HEAD follows the machine's
+    # init.defaultBranch: Apple's git says main, CI's git says master, and a
+    # HEAD naming a branch that doesn't exist leaves the clone below with
+    # nothing checked out.
+    git(upstream, "symbolic-ref", "HEAD", "refs/heads/main")
 
     seed = Path(tmp) / "seed"
     seed.mkdir()

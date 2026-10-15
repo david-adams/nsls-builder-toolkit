@@ -1,3 +1,4 @@
+# windows-ci: ps51 | Collector evidence silences the skill hook
 # Collector early-exit on a real PC. Proves, under Windows PowerShell:
 #   1. Test-CollectorEvidenceFresh (hooks/collector_evidence.ps1) applies the
 #      same contract as hooks/collector_evidence.py, over the same cases as

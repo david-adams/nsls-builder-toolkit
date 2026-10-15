@@ -42,8 +42,8 @@ check("the copy gets the original's permissions", "Set-Acl -LiteralPath $bak -Ac
 fn = ps[ps.index("function Without-Matching"):]
 fn = fn[:fn.index("\n}\n")]
 check("the hook filter works entry by entry", "$group.hooks = $rest" in fn and "-join" not in fn)
-check("Windows CI runs the real functions under PS 5.1",
-      "install-settings-roundtrip.ps1" in (REPO / ".github" / "workflows" / "windows-hooks.yml").read_text())
+import run_windows_ci  # noqa: E402  (beside this file; reads the `# windows-ci:` markers)
+check("Windows CI runs the real functions under PS 5.1", "ps51" in run_windows_ci.lanes("install-settings-roundtrip.ps1"))
 
 print()
 if failures:

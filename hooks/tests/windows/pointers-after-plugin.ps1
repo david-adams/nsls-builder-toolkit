@@ -1,3 +1,4 @@
+# windows-ci: ps51 | Once the plugin is active the hook stops writing org pointers but still notices the builder's own skills
 # Once the toolkit is an active plugin, the Windows hook stops writing org
 # pointer files (the plugin delivers those skills) but still notices a
 # builder's own skill that sits where a pointer would. The functions are lifted

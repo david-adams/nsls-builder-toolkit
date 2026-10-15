@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | A builder's no is remembered outside a git repo too (keyed by folder)
 """A builder's "no" is remembered outside a git repo too.
 
 Plain stdlib: `python3 hooks/tests/test_guardrail_memory_folders.py`.

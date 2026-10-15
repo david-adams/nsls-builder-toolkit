@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | A repo with a .personal-repo file is not blocked as NSLS work in a personal repo
 """A repo that declares itself personal is not blocked by gate 1.
 
 Plain stdlib, no pytest: run with `python3 hooks/tests/test_gate_personal_marker.py`.
