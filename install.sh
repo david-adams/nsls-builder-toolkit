@@ -490,6 +490,76 @@ migrate_compound_marketplace() {
   fi
 }
 
+# --- Toolkit plugin pin (begin) ---
+# The plugin must come from the same branch as the clone in Step 1. Without a
+# pin, `marketplace add` takes the repo's default branch, so testing a branch
+# ran the branch's hooks (the clone) with main's skills (the plugin). A local
+# folder can't carry a pin: Claude Code reads it as it is on disk.
+toolkit_market() {
+  case "$REPO_URL" in
+    http://*|https://*|ssh://*|git@*)
+      if [ "$REPO_BRANCH" != "main" ]; then
+        echo "$REPO_URL#$REPO_BRANCH"
+        return 0
+      fi ;;
+  esac
+  echo "$REPO_URL"
+}
+
+# install_plugin skips a plugin that is already installed, so on a machine that
+# has the toolkit the pin above never took effect. Start the plugin over when
+# it can't be what was asked for: on every run that names a branch or a repo
+# (a branch moves without a version bump, which `plugin update` ignores), and
+# on a plain run that finds a test branch or another repo still registered.
+# The normal case, production and unpinned, is left alone.
+repoint_toolkit_marketplace() {
+  local registry="$CONFIG_DIR/plugins/known_marketplaces.json"
+  [ -r "$registry" ] || return 0
+  local verdict
+  verdict=$(python3 - "$registry" "$REPO_URL" "${NSLS_TOOLKIT_BRANCH:-}${NSLS_TOOLKIT_REPO:-}" <<'PY' 2>/dev/null || true
+import json, sys
+registry, wanted, testing = sys.argv[1], sys.argv[2], sys.argv[3]
+src = (json.load(open(registry, encoding="utf-8")).get("nsls-toolkit") or {}).get("source") or {}
+if not src:
+    print("absent")
+    sys.exit()
+url = src.get("url") or src.get("path") or ""
+if not url and src.get("repo"):
+    url = "https://github.com/" + src["repo"]
+def norm(u):
+    u = u.strip().rstrip("/").lower()
+    return u[:-4] if u.endswith(".git") else u
+print("repoint" if testing or src.get("ref") or norm(url) != norm(wanted) else "keep")
+PY
+)
+  [ "$verdict" = "repoint" ] || return 0
+  echo "  Pointing the toolkit plugin at $REPO_BRANCH..."
+  "$CLAUDE_BIN" plugin marketplace remove nsls-toolkit >/dev/null 2>&1 || true
+}
+
+# The plugin's half of the receipt. On a test run, a plugin that isn't the
+# commit the clone is on is the failure this block exists to prevent: say so.
+toolkit_plugin_receipt() {
+  local sha clone
+  sha=$(python3 - "$CONFIG_DIR/plugins/installed_plugins.json" <<'PY' 2>/dev/null || true
+import json, sys
+for e in json.load(open(sys.argv[1], encoding="utf-8")).get("plugins", {}).get("nsls-builder-toolkit@nsls-toolkit", []):
+    if e.get("gitCommitSha"):
+        print(e["gitCommitSha"])
+        break
+PY
+)
+  [ -n "$sha" ] || return 0
+  echo "  Plugin commit: ${sha:0:7}"
+  clone=$(git -C "$PLUGIN_DIR" rev-parse HEAD 2>/dev/null || true)
+  if [ -n "${NSLS_TOOLKIT_BRANCH:-}" ] && [ -n "$clone" ] && [ "$sha" != "$clone" ]; then
+    echo "  [!] The plugin (${sha:0:7}) is not the commit you asked for (${clone:0:7})."
+    echo "      Re-run this installer; if it happens again, the branch moved mid-install."
+    INSTALL_FAILED="${INSTALL_FAILED:+$INSTALL_FAILED }nsls-builder-toolkit"
+  fi
+}
+# --- Toolkit plugin pin (end) ---
+
 if [ -n "$CLAUDE_BIN" ]; then
   # superpowers needs its marketplace registered first — a bare install spec
   # with no marketplace can never resolve on a fresh machine.
@@ -504,8 +574,10 @@ if [ -n "$CLAUDE_BIN" ]; then
   # $REPO_URL, not the hard-coded production URL: NSLS_TOOLKIT_REPO exists so a
   # fork can be tested end to end, and cloning the fork while installing the
   # plugin from upstream tests two different revisions at once.
+  repoint_toolkit_marketplace
   install_plugin "nsls-builder-toolkit" "nsls-builder-toolkit@nsls-toolkit" \
-    "$REPO_URL" required
+    "$(toolkit_market)" required
+  toolkit_plugin_receipt
 
   install_plugin "superpowers" "superpowers@superpowers-marketplace" \
     "https://github.com/obra/superpowers-marketplace.git"
@@ -1135,7 +1207,9 @@ fi
 
 echo ""
 echo "==============================="
-if [ "$UPDATE_FAILED" = 1 ]; then
+if [ -n "$INSTALL_FAILED" ]; then
+  echo "  NSLS Builder Toolkit set up, but this did NOT install: $INSTALL_FAILED (see [!] above)."
+elif [ "$UPDATE_FAILED" = 1 ]; then
   echo "  NSLS Builder Toolkit set up, but NOT updated (see the WARNING above)."
 else
   echo "  NSLS Builder Toolkit installed!"
@@ -1211,3 +1285,7 @@ else
   echo "     productivity skills (daily planning, weekly reviews, project logging)."
   echo ""
 fi
+
+# A known failure exits 1, so a wrapper or CI can tell (the banner above already
+# says what is missing).
+[ -z "$INSTALL_FAILED" ] || exit 1

@@ -175,8 +175,11 @@ check("a same-named plugin from another marketplace does not satisfy the check",
 check("and the missing org plugin is still reported",
       "did NOT install" in r.stdout, f"({r.stdout.strip()[:120]!r})")
 
+# toolkit_market is $REPO_URL, plus the branch when one is being tested; its
+# cases are run for real in test_installer_plugin_pin.py.
 check("the org plugin install uses REPO_URL, not a hard-coded upstream",
-      '"$REPO_URL" required' in ROOT_SH.read_text(),
+      '"$(toolkit_market)" required' in ROOT_SH.read_text()
+      and 'echo "$REPO_URL#$REPO_BRANCH"' in ROOT_SH.read_text(),
       "(fork testing would install the wrong revision)")
 
 works = ('#!/bin/sh\ncase "$2" in list) echo nsls-builder-toolkit; exit 0;;'

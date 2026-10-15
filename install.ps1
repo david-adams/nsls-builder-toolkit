@@ -710,22 +710,28 @@ try {
 # --- Step 3: Install marketplace plugins ---
 Write-Host ""
 Write-Host "Step 3: Installing recommended plugins..."
+# What the toolkit needs and didn't get. Read by the closing banner and the exit
+# code, so a failed install is never reported as "installed!" (parity with
+# install.sh's INSTALL_FAILED).
+$InstallFailed = @()
 if ($ClaudeBin) {
+    # Returns $true when the plugin is present afterwards, $false when it isn't.
     function Install-Plugin {
         param([string]$Name, [string]$Spec, [string]$Market)
         $installed = (& $ClaudeBin plugin list 2>$null | Out-String)
-        if ($installed -match [regex]::Escape($Name)) { Write-Host "  ${Name}: already installed"; return }
+        if ($installed -match [regex]::Escape($Name)) { Write-Host "  ${Name}: already installed"; return $true }
         # A native command's non-zero exit does NOT trip try/catch, so we check
         # $LASTEXITCODE and warn explicitly. Redirect stderr to $null (NOT `2>&1`):
         # merging stderr into the pipeline under $ErrorActionPreference='Stop'
         # raises a terminating NativeCommandError before the warning below runs.
         if ($Market) {
             & $ClaudeBin plugin marketplace add $Market 2>$null | Out-Null
-            if ($LASTEXITCODE -ne 0) { Write-Host "  Warning: failed to add $Name marketplace. Retry: claude plugin marketplace add $Market"; return }
+            if ($LASTEXITCODE -ne 0) { Write-Host "  Warning: failed to add $Name marketplace. Retry: claude plugin marketplace add $Market"; return $false }
         }
         Write-Host "  Installing $Name..."
         & $ClaudeBin plugin install $Spec 2>$null | Out-Null
-        if ($LASTEXITCODE -ne 0) { Write-Host "  Warning: '$Name' install failed. Retry: claude plugin install $Spec" }
+        if ($LASTEXITCODE -ne 0) { Write-Host "  Warning: '$Name' install failed. Retry: claude plugin install $Spec"; return $false }
+        return $true
     }
     # Migrate compound off the renamed 'every-marketplace' (parity with install.sh).
     if ((& $ClaudeBin plugin marketplace list 2>$null | Out-String) -match 'every-marketplace') {
@@ -747,12 +753,59 @@ if ($ClaudeBin) {
     # registers this machine's hooks, and the settings.json entries below
     # become the transitional copy that stage B retires once per-hook beacons
     # prove the plugin's own hooks fire here.
-    Install-Plugin 'nsls-builder-toolkit' 'nsls-builder-toolkit@nsls-toolkit' `
-        $RepoUrl
+    # The plugin must come from the same branch as the clone in Step 1. Without a
+    # pin, 'marketplace add' takes the repo's default branch, so testing a branch
+    # ran the branch's hooks (the clone) with main's skills (the plugin). A local
+    # folder can't carry a pin: Claude Code reads it as it is on disk.
+    $ToolkitMarket = $RepoUrl
+    if ($RepoBranch -ne 'main' -and $RepoUrl -match '^(https?://|ssh://|git@)') {
+        $ToolkitMarket = "$RepoUrl#$RepoBranch"
+    }
+    # Install-Plugin skips a plugin that is already installed, so on a machine
+    # that has the toolkit the pin never took effect. Start the plugin over when
+    # it can't be what was asked for: on every run that names a branch or a repo
+    # (a branch moves without a version bump, which 'plugin update' ignores), and
+    # on a plain run that finds a test branch or another repo still registered.
+    # The normal case, production and unpinned, is left alone.
+    $Testing = [bool]("$env:NSLS_TOOLKIT_BRANCH$env:NSLS_TOOLKIT_REPO")
+    $Registry = Join-Path $ConfigDir 'plugins\known_marketplaces.json'
+    $Repoint = $false
+    if (Test-Path $Registry) {
+        try {
+            $src = (Get-Content $Registry -Raw -Encoding UTF8 | ConvertFrom-Json).'nsls-toolkit'.source
+            if ($src) {
+                $url = if ($src.url) { $src.url } elseif ($src.path) { $src.path } elseif ($src.repo) { "https://github.com/$($src.repo)" } else { '' }
+                $norm = { param($u) $u = "$u".Trim().TrimEnd('/').ToLowerInvariant(); if ($u.EndsWith('.git')) { $u.Substring(0, $u.Length - 4) } else { $u } }
+                $Repoint = $Testing -or [bool]$src.ref -or ((& $norm $url) -ne (& $norm $RepoUrl))
+            }
+        } catch { }  # unreadable registry: leave it, as before
+    }
+    if ($Repoint) {
+        Write-Host "  Pointing the toolkit plugin at $RepoBranch..."
+        & $ClaudeBin plugin marketplace remove nsls-toolkit 2>$null | Out-Null
+    }
+    if (-not (Install-Plugin 'nsls-builder-toolkit' 'nsls-builder-toolkit@nsls-toolkit' `
+        $ToolkitMarket)) { $InstallFailed += 'nsls-builder-toolkit' }
+    # The plugin's half of the receipt. On a test run, a plugin that isn't the
+    # commit the clone is on is the failure the pin above exists to prevent.
+    try {
+        $entry = (Get-Content (Join-Path $ConfigDir 'plugins\installed_plugins.json') -Raw -Encoding UTF8 |
+            ConvertFrom-Json).plugins.'nsls-builder-toolkit@nsls-toolkit' | Where-Object { $_.gitCommitSha } | Select-Object -First 1
+        if ($entry) {
+            $sha = "$($entry.gitCommitSha)"
+            Write-Host "  Plugin commit: $($sha.Substring(0, [Math]::Min(7, $sha.Length)))"
+            $clone = "$(Invoke-Native 'git' @('-C', $PluginDir, 'rev-parse', 'HEAD'))".Trim()
+            if ($env:NSLS_TOOLKIT_BRANCH -and $clone -match '^[0-9a-f]{40}$' -and $clone -ne $sha) {
+                Write-Host "  [!] The plugin is not the commit you asked for ($($clone.Substring(0, 7)))."
+                Write-Host "      Re-run this installer; if it happens again, the branch moved mid-install."
+                $InstallFailed += 'nsls-builder-toolkit (not the branch asked for)'
+            }
+        }
+    } catch { }  # no registry yet: nothing to report
 
-    Install-Plugin 'superpowers' 'superpowers@superpowers-marketplace' `
+    $null = Install-Plugin 'superpowers' 'superpowers@superpowers-marketplace' `
         'https://github.com/obra/superpowers-marketplace.git'
-    Install-Plugin 'compound-engineering' 'compound-engineering@compound-engineering-plugin' `
+    $null = Install-Plugin 'compound-engineering' 'compound-engineering@compound-engineering-plugin' `
         'https://github.com/EveryInc/compound-engineering-plugin.git'
 } else {
     Write-Host "  Could not find the 'claude' CLI. After your next Claude Code session, run /nsls-setmeup."
@@ -881,7 +934,8 @@ if ($PrereqReport.Count) {
 }
 Write-Host ""
 Write-Host "==============================="
-if ($UpdateFailed) { Write-Host "  NSLS Builder Toolkit set up, but NOT updated (see the WARNING above)." }
+if ($InstallFailed.Count) { Write-Host "  NSLS Builder Toolkit set up, but this did NOT install: $($InstallFailed -join ', ') (see [!] / Warning above)." }
+elseif ($UpdateFailed) { Write-Host "  NSLS Builder Toolkit set up, but NOT updated (see the WARNING above)." }
 else { Write-Host "  NSLS Builder Toolkit installed!" }
 Write-Host "==============================="
 Write-Host ""
@@ -919,4 +973,5 @@ Write-Host ""
 # wrapper checking the code (or /nsls-setmeup's re-provision) would treat it as failed.
 # Under a bare `iwr | iex` paste there's no wrapper to see a code and `exit`
 # would close the user's window, so just return.
-if ($RunningFromFile) { exit 0 } else { return }
+# A known failure exits 1, so a wrapper or CI can tell.
+if ($RunningFromFile) { if ($InstallFailed.Count) { exit 1 } else { exit 0 } } else { return }
