@@ -69,7 +69,7 @@ class Home(unittest.TestCase):
     def cowork(self, sid, meta, turns, account="acct"):
         base = os.path.join(self.home, "Library", "Application Support", "Claude", "local-agent-mode-sessions", account, "org")
         os.makedirs(os.path.join(base, sid), exist_ok=True)
-        meta = dict({"sessionId": sid, "lastActivityAt": int(NOW.timestamp() * 1000)}, **meta)
+        meta = dict({"sessionId": sid, "lastActivityAt": int(NOW.timestamp() * 1000), "emailAddress": "me@nsls.org"}, **meta)
         with open(os.path.join(base, sid + ".json"), "w") as fh:
             json.dump(meta, fh)
         with open(os.path.join(base, sid, "audit.jsonl"), "w") as fh:
@@ -161,6 +161,19 @@ class Masking(unittest.TestCase):
         self.assertTrue(out.endswith("…"))
         self.assertIn(out[:-1].split(" ")[-1], "the stronger fix is a hook in your settings file".split(" "))
 
+    def test_links_keep_only_their_host(self):
+        out = digest.mask("review https://thensls.slack.com/files/U0B2B0L7858/F0C6Y3UBXV0/x.pdf and docs.google.com")
+        self.assertIn("https://thensls.slack.com/…", out)
+        self.assertNotIn("U0B2B0L7858", out)
+        self.assertEqual(digest.mask("ping U0B2B0L7858 about it"), "ping [id] about it")
+        self.assertEqual(digest.mask("UPDATEDALL works"), "UPDATEDALL works")  # capitals without digits stay
+        self.assertEqual(digest.mask("see https://example.com?document=private-id"), "see https://example.com/…")
+        self.assertEqual(digest.mask("see https://example.com#private-id"), "see https://example.com/…")
+        self.assertEqual(digest.mask("https://me:hunter2@example.com/x"), "https://example.com/…")
+        self.assertEqual(digest.mask("at https://docs.google.com/ today"), "at https://docs.google.com today")
+        self.assertEqual(digest.mask("HTTPS://example.com?document=private-id"), "HTTPS://example.com/…")
+        self.assertEqual(digest.mask("https://[::1]:8080/private-id?document=x"), "https://[::1]:8080/…")
+
     def test_dates_and_words_survive(self):
         self.assertEqual(digest.mask("on 2026-09-19 at 9:30am, nsls-personal-toolkit-cowork"),
                          "on 2026-09-19 at 9:30am, nsls-personal-toolkit-cowork")
@@ -173,6 +186,10 @@ class Windows(Home):
         d = self.scan(days=7)
         self.assertEqual([t["text"] for t in d["sessions"][0]["turns"]], ["new one", "b", "c"])
         self.assertEqual(d["surfaces"]["code"]["aggregate"]["untimed_records_skipped"], 1)
+
+    def test_records_written_after_the_scan_began_wait_for_the_next_one(self):
+        self.code_session("s1", [user("a"), user("b"), user("later", ts=(NOW + dt.timedelta(hours=1)).isoformat())])
+        self.assertNotIn("later", json.dumps(self.scan()))
 
     def test_timestamp_forms(self):
         secs = int(NOW.timestamp())
@@ -259,6 +276,7 @@ class Signals(Home):
 
 class Cowork(Home):
     def test_cowork_meta_and_audit(self):
+        quiet(digest.main, ["config", "email=me@nsls.org"])
         self.cowork("local_1", {"title": "Tidy the Q3 folder", "userSelectedFolders": ["/Users/x/Q3"]},
                     ["sort these files", "rename by date", "now summarise"])
         self.cowork("local_2", {"title": "Monday digest", "scheduledTaskId": "t1"}, ["a", "b", "c"])
@@ -277,6 +295,20 @@ class Cowork(Home):
         quiet(digest.main, ["config", "email=me@nsls.org"])
         self.assertEqual([s["title"] for s in self.scan()["sessions"]], ["Work task"])
 
+    def test_cowork_is_skipped_until_the_account_is_confirmed_as_yours(self):
+        self.cowork("local_1", {"title": "Mine, probably"}, ["a", "b", "c"])
+        d = self.scan()
+        self.assertEqual(d["sessions"], [])                                   # no work email known yet
+        self.assertTrue(any("no work email is known" in n for n in d["notes"]))
+        self.cowork("local_2", {"title": "No owner on record", "emailAddress": None}, ["a", "b", "c"])
+        quiet(digest.main, ["config", "email=me@nsls.org"])
+        self.assertEqual([s["title"] for s in self.scan()["sessions"]], ["Mine, probably"])  # unlabelled one stays out
+
+    def test_pasted_text_in_a_command_is_dropped_too(self):
+        self.code_session("s1", [user('<command-name>/quicknote</command-name><command-args><pasted_content id="1">Dear Sam</pasted_content id="1"></command-args>'),
+                                 user("b"), user("c")])
+        self.assertNotIn("Dear Sam", json.dumps(self.scan()))
+
     def test_a_lone_account_that_isnt_yours_is_skipped(self):
         self.cowork("local_1", {"title": "Someone else's task", "emailAddress": "bob@nsls.org"}, ["a", "b", "c"])
         quiet(digest.main, ["config", "email=me@nsls.org"])
@@ -285,6 +317,7 @@ class Cowork(Home):
         self.assertTrue(any("isn't your work email" in n for n in d["notes"]))
 
     def test_non_coder_week(self):
+        quiet(digest.main, ["config", "email=me@nsls.org"])
         for i, t in enumerate(["Summarise the benefits PDF", "Draft chapter email", "Clean up the events sheet", "Plan Monday"]):
             self.cowork("local_%d" % i, {"title": t}, ["do it", "shorter please", "thanks"])
         d = self.scan()
@@ -359,6 +392,11 @@ class Render(Home):
         self.assertIn("Builder stage on record", main)
         with open(digest.history_path()) as fh:
             self.assertEqual(json.loads(fh.readline())["stage"], "Maker")
+
+    def test_unclear_fit_is_shown_but_not_scored(self):
+        main = self.report(tasks=[{"level": "Agent", "fit": "right"}, {"level": "Agent", "fit": "unclear"}]).split("<main", 1)[1]
+        self.assertIn("1<small> of 1</small>", main)
+        self.assertIn("Not judged", main)
 
     def test_charts_ladder_bars_and_tiles(self):
         out = self.report(tasks=[{"session": "a", "task": "t1", "level": "Agent", "fit": "right", "checked": True, "why": "fit"},
@@ -440,7 +478,7 @@ class Render(Home):
         self.assertIn("match this tone and length", main)
         self.assertIn("Paste last month&#x27;s agenda as the model.", main)
         self.assertIn('id="habits"', main)
-        self.assertIn('See the 3 you could improve', main)           # 2 ahead of 5, so 3 to work on
+        self.assertIn('2 to improve · 1 about typical →', main)      # the tile names the same groups as the chart
 
     def test_template_prompts_need_an_example_from_a_real_session(self):
         exp = {"title": "Open each session with a job card", "direction": "habit", "why": "w", "check": "c",
