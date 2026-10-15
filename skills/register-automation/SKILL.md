@@ -102,18 +102,28 @@ Ask the user only for fields you can't detect:
 Tier 2, `Company-wide` = Tier 3, and **both `Customer Facing` scopes
 (`Advisors`, `Members`) = Tier 3** — they exist in the tracker and are the most
 consequential builds there are; leaving them unmapped let member-facing work
-skip every Tier 3 requirement. Four fields hang off the tier:
+skip every Tier 3 requirement. Four fields hang off the tier. Send them inside
+`automation` under these exact JSON keys: the proxy drops any key it doesn't
+know without saying so, so a misspelled key means an empty field.
 
-| Field | When to set |
-|---|---|
-| `Platform Used` | Always. `Anthropic` (default) / `OpenAI` / `Other`. |
-| `Design Doc URL` | Tier 2+. Link the doc `/product-design` produces. |
-| `Reviewer` | Tier 3 always; Tier 2 when effort > ~2 days. Links to the Builders table. |
-| `Review Status` | Tier 2+. `Not needed` → `Requested` → `In review` → `Go` / `Go with notes` / `Pull in another reviewer` / `Slow down`. |
+| Field | JSON key | When to set |
+|---|---|---|
+| `Platform Used` | `platform_used` | Always. `Anthropic` (default) / `OpenAI` / `Other`. |
+| `Design Doc URL` | `design_doc_url` | Tier 2+. Link the doc `/product-design` produces. |
+| `Reviewer` | `reviewer_email` | Tier 3 always; Tier 2 when effort > ~2 days. The reviewer's email; the proxy links their Builders row. |
+| `Review Status` | `review_status` | Tier 2+. `Not needed` → `Requested` → `In review` → `Go` / `Go with notes` / `Pull in another reviewer` / `Slow down`. |
 
-**Reviewer pool:** Kevin (platform, architecture, member-facing — final say) ·
-Davo (Tier 2/3 design, skills, agentic flows) · Jenna (adoption, UX, HR-ops
+Select values are exact, capitals included: `Go with notes`, not `go with notes`.
+
+**Reviewer pool:** Kevin, `kprentiss@nsls.org` (platform, architecture,
+member-facing — final say) · Davo, `davowood@nsls.org` (Tier 2/3 design,
+skills, agentic flows) · Jenna, `jfontanez@nsls.org` (adoption, UX, HR-ops
 surfaces) · a domain reviewer when the build crosses into their flow.
+
+`reviewer_email` must belong to someone on the tracker's Builders table (their
+main email or one listed under Alternate Emails). If it doesn't, the proxy
+answers 404 and registers nothing; ask the builder for the reviewer's NSLS
+email and try again.
 
 **Platform check.** If `Platform Used` is not `Anthropic` and scope is
 `Department` or `Company-wide`, that's a hard gate — it needs a short written
@@ -139,6 +149,11 @@ Call `POST /register-automation-with-builder`:
     "name": "...",
     "stage": "...",
     "department": "...",
+    "scope": "Company-wide",
+    "platform_used": "Anthropic",
+    "design_doc_url": "https://docs.google.com/document/d/...",
+    "reviewer_email": "kprentiss@nsls.org",
+    "review_status": "Requested",
     "...all detected and user-provided fields"
   },
   "builder_email": "jdoe@nsls.org",
@@ -259,10 +274,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/hooks/guardrail-memory.py" record design-doc --no
 
 (ships in part 3 of this set; recording it also emits the `guardrail_proceeded`
 event the declined count is built from) — and leave
-`Design Doc URL` empty and `Review Status` at `Not needed` — running
+`design_doc_url` unset and `review_status` at `Not needed` — running
 `/product-design` anyway is exactly the soft-path violation the tier table
 forbids. **Tier 3: not optional.** Run `/product-design` in Generate Mode,
-write the URL to `Design Doc URL`, set `Review Status` to `Requested`.
+send the URL as `design_doc_url`, the reviewer as `reviewer_email`, and
+`review_status: "Requested"`.
 
 **Tier 3 hard gate.** A Company-wide or member-facing automation may not advance
 to a shipping stage without a tracker record and an assigned `Reviewer`. State
