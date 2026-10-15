@@ -49,6 +49,7 @@ Then open Claude Code and say `/nsls-setmeup` to connect your tools and optional
 | **/google-slides-api** | Edit existing Google Slides via API |
 | **/gws** | Google Workspace Sheets CLI |
 | **/quicknote** | Draft your weekly Signal quick note from what you actually did — your Claude sessions first, plus the calendar, Slack, email, Fathom, Asana and daily notes you choose |
+| **/write-like-me** | Learn how you change Claude's writing — from your corrections and from what you actually sent on Slack, email or Google Docs — and save a named style guide you approve, so Claude drafts like you next time |
 | **/netlify-deploy** | Deploy and preview static pages |
 | **/publish-to-dsr** | Publish a public page, Library master, or institution-room document (HTML, PDF, link, built deck) to the Digital Sales Room with a personal publishing token — no AWS, no repo clone |
 | **/deployment-guide** | How to deploy to Railway, Airtable, GAS, Cloudflare |
@@ -229,6 +230,7 @@ They form a cycle: `/data-model-discovery` explores a new system → maps it aga
 | **google-drive** | Google Drive file management |
 | **google-slides-api** | Edit existing Google Slides via API |
 | **quicknote** | Draft your weekly Signal quick note from your Claude sessions, calendar, Slack, email, Fathom, Asana and daily notes |
+| **write-like-me** | Build a personal style guide (Slack, email or Google Docs) from your edits to Claude's drafts; keeps style, drops fact fixes |
 | **netlify-deploy** | Deploy and preview static pages |
 | **publish-to-dsr** | Publish a public page, Library master, or institution-room document to the Digital Sales Room with a publishing token |
 | **pydoc-pipeline** | Generate documentation from Python code |
