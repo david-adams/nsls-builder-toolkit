@@ -1,3 +1,4 @@
+# windows-ci: ps51 | The hook's Python step runs, and says so when it cannot, under the exact settings.json command
 # The Windows hook's Python step, run exactly the way settings.json runs it:
 # `powershell -NoProfile -ExecutionPolicy Bypass -File ...\session-start.ps1`,
 # which is Windows PowerShell 5.1 on every PC. Run this file under 5.1 too.

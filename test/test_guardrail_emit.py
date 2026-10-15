@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | Guardrail event labels match Signal's two lists
 """
 Tests for the guardrail event emitter.
 

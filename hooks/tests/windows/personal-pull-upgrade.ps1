@@ -1,3 +1,4 @@
+# windows-ci: ps51 | The hook makes the personal toolkit's old pull entry safe from a git hook's variables, and touches nothing else
 # The Windows hook upgrades the personal toolkit's old pull entry in
 # settings.json, and nothing else. Proves, under Windows PowerShell 5.1:
 #   1. the exact old command, and its `unset` form, become the command the

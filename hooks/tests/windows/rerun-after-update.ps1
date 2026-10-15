@@ -1,3 +1,4 @@
+# windows-ci: ps51 | The session that updates the hook runs the new copy, not the old one
 # The Windows hook runs the NEW copy of itself in the session whose update
 # changed it. PowerShell parses a script before running it, so without this the
 # session that pulled a fix kept running the old code (PC test, 2026-10-03).

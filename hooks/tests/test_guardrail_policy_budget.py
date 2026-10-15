@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# windows-ci: python | The guardrail policy reaches Claude whole (under the hook-output cap, its own hook on clear and compact, no bare python3)
 """The guardrail policy reaches Claude whole, and stays small enough to.
 
 Plain stdlib: `python3 hooks/tests/test_guardrail_policy_budget.py`.
