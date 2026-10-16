@@ -1084,10 +1084,12 @@ DEPLOY_HARMLESS_RE = re.compile(
 
 
 def gate_unregistered_ship(tool: str, ti: dict):
-    """Tier 3 ship with no tracker record.
+    """Tier 3 ship with no tracker record, or with one but no reviewer.
 
-    Only blocks when the tracker positively reports no record. Network failure,
-    an unparseable response, or an unnamed repo all fall through to allow.
+    Blocks a deploy only when the tracker positively reports no record, or when
+    the record's scope is Tier 3 (scope_tier: Company-wide or Customer Facing)
+    and no reviewer is assigned. Network failure, an unparseable response, an
+    unnamed repo, or a scope that names no tier all fall through to allow.
     """
     if tool != "Bash":
         return
