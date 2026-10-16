@@ -359,6 +359,39 @@ def _text(value) -> str:
     return ""
 
 
+# The Automation Tracker's Scope single-select, as the policy's tiers (CLAUDE.md
+# § Builder Guardrails). Its five choices, read from the live schema 2026-10-16:
+# Personal, Department, Company-wide, Customer Facing: Advisors and Customer
+# Facing: Members. Both gates that need a tier ask scope_tier() instead of
+# keeping a substring list each, because both lists missed the Customer Facing
+# choices: 9 builds were registered as Customer Facing: Members that day, Tier 3
+# in the policy's own words ("members see it"), and neither the reviewer check
+# nor the platform check ever looked at them. A new Scope choice needs a line
+# here, or both gates read it as unknown. Highest tier first, so a scope that
+# names two tiers is judged by the higher, as the old substring tests did.
+_SCOPE_TIERS = (
+    (3, ("company", "customer facing")),
+    (2, ("department",)),
+    (1, ("personal",)),
+)
+
+
+def scope_tier(value) -> int:
+    """The policy tier a tracker Scope names: 1, 2 or 3, or 0 for none.
+
+    0 means "I can't tell", and both gates treat it as silence: an empty,
+    missing or unrecognised scope is not evidence of anything (Codex review
+    2026-08-15). Takes the field as the tracker sent it, string or Airtable
+    object. Hyphens, underscores and runs of spaces read as one space, so
+    "customer-facing" and "Customer  Facing" are the same words.
+    """
+    scope = re.sub(r"[\s_-]+", " ", _text(value).lower())
+    for tier, words in _SCOPE_TIERS:
+        if any(w in scope for w in words):
+            return tier
+    return 0
+
+
 _TRACKER_CLEAR_STAMP = ".cleared-at"
 
 
@@ -1051,10 +1084,12 @@ DEPLOY_HARMLESS_RE = re.compile(
 
 
 def gate_unregistered_ship(tool: str, ti: dict):
-    """Tier 3 ship with no tracker record.
+    """Tier 3 ship with no tracker record, or with one but no reviewer.
 
-    Only blocks when the tracker positively reports no record. Network failure,
-    an unparseable response, or an unnamed repo all fall through to allow.
+    Blocks a deploy only when the tracker positively reports no record, or when
+    the record's scope is Tier 3 (scope_tier: Company-wide or Customer Facing)
+    and no reviewer is assigned. Network failure, an unparseable response, an
+    unnamed repo, or a scope that names no tier all fall through to allow.
     """
     if tool != "Bash":
         return
@@ -1108,11 +1143,13 @@ def gate_unregistered_ship(tool: str, ti: dict):
         return  # unreachable, unparseable, or a capped page => allow
 
     if match:
-        scope = _text(match.get("scope")).lower()
+        # Kept as the tracker wrote it: the block names the build's real scope.
+        # It used to say "Company-wide" whatever the record said.
+        scope = _text(match.get("scope")).strip()
         reviewer = match.get("reviewer")
-        if "company" in scope and not reviewer:
+        if scope_tier(scope) >= 3 and not reviewer:
             block(
-                f"Critical flag — '{name}' is registered as Company-wide but has "
+                f"Critical flag — '{name}' is registered as {scope} but has "
                 f"no reviewer assigned, and this deploys it.\n\n"
                 f"Anything member-facing needs a second set of eyes before it "
                 f"ships. Kevin covers member-facing and usually turns these round "
@@ -1375,12 +1412,12 @@ def gate_off_platform(tool: str, ti: dict):
     if status != "found":
         return  # this gate needs a positive scope to have anything to say
 
-    scope = _text(record.get("scope")).lower()
+    scope = _text(record.get("scope")).strip()
 
     # Positive confirmation of Tier 2+ only. Previously any unrecognised scope
     # string ("", "n/a", "tbd") fell through to a block; Codex review
     # 2026-08-15 caught it. Unknown scope is not evidence of anything.
-    if not ("department" in scope or "company" in scope):
+    if scope_tier(scope) < 2:
         return
 
     block(
