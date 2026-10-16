@@ -12,7 +12,6 @@ on PATH).
 """
 import contextlib
 import io
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -99,9 +98,11 @@ code, out = quiet([], fake_repo({"test/notes.py": "nothing marked\n"}))
 check("no marked tests at all fails loudly", code == 1 and "no marked tests" in out, out)
 
 print("\nPowerShell scripts run the way a `shell: powershell` / `pwsh` step runs them")
-shells = [lane for lane, (exe, _) in ci.SHELLS.items() if shutil.which(exe)]
+shells = [lane for lane in ci.SHELLS if ci.shell_exe(lane)]
 if not shells:
     print("  (no PowerShell on this machine; the Windows runner always has both)")
+check("Windows PowerShell 5.1 counts only on Windows (a Mac's `powershell` is 7 under another name)",
+      (ci.shell_exe("ps51") is None) == (sys.platform != "win32"))
 for lane in shells:
     repo = fake_repo({
         "hooks/tests/windows/a-error.ps1": f"# windows-ci: {lane} | a non-terminating error\nWrite-Error 'boom'\n'after'\n",

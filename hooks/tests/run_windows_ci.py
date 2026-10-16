@@ -94,12 +94,23 @@ def ps51_env():
     return env
 
 
+def shell_exe(lane):
+    """The executable for a PowerShell lane on this machine, or None.
+
+    Windows PowerShell 5.1 exists only on Windows. Elsewhere a `powershell` command is
+    PowerShell 7 under another name (GitHub's macOS runners have one), so the 5.1 lane
+    counts as absent there instead of running 7 and calling it 5.1."""
+    if lane == "ps51" and os.name != "nt":
+        return None
+    return shutil.which(SHELLS[lane][0])
+
+
 def run_one(path, lane, root=ROOT):
     """The test's exit code, or None when this machine has no such shell."""
     rel = path.relative_to(root).as_posix()
     if lane == "python":
         return subprocess.run([sys.executable, rel], cwd=root).returncode
-    exe = shutil.which(SHELLS[lane][0])
+    exe = shell_exe(lane)
     if exe is None:
         return None
     # The same wrapper GitHub Actions puts around a `shell: powershell` / `pwsh` step.
