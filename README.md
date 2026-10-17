@@ -77,6 +77,8 @@ For non-software work — campaigns, strategy docs, briefs, research synthesis. 
 | **/kw:review** | Two-reviewer parallel check on a plan — one audits LOP grounding and goals, the other audits every number for source and freshness. P1/P2/P3 findings before you share. |
 | **/kw:compound** | Extract 1–3 learnings from a finished session and route them to the right tier (personal Obsidian, team `_shared/learnings/`, SLT knowledge graph). |
 
+Type the `kw:` part: `/kw:plan`, not `/plan`. On their own, `/plan` and `/review` start Claude Code's built-in plan mode and code review. Or just ask in plain words: "help me plan the spring roadshow", "save what we learned".
+
 Use these for strategy/knowledge work. For software features use `/ce-brainstorm` → `/ce-plan` → `/ce-work` → `/ce-code-review` from the Compound Engineering plugin. For new automations start with `/interrogate`.
 
 ## Strategy Studio
