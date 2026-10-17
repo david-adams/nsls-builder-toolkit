@@ -1,6 +1,6 @@
 ---
 name: kw:brainstorm
-description: "Brain dump and compile NSLS knowledge before structuring a plan. Use when starting any non-trivial strategic or knowledge work — after a meeting, when tackling a new problem, when you have scattered inputs that need organizing. Trigger phrases: brainstorm, brain dump, help me think through this, let me brain dump, I need to figure out, kw:brainstorm, /kw:brainstorm. This is for strategy/campaigns/knowledge work — NOT for new automations (use /interrogate) and NOT for software features (use ce:brainstorm)."
+description: "Brain dump and compile NSLS knowledge before structuring a plan. Use when starting any non-trivial strategic or knowledge work — after a meeting, when tackling a new problem, when you have scattered inputs that need organizing. Trigger phrases: brainstorm, brain dump, help me think through this, let me brain dump, I need to figure out, kw:brainstorm, /kw:brainstorm. This is for strategy/campaigns/knowledge work — NOT for new automations (use /interrogate) and NOT for software features (use /ce-brainstorm)."
 argument-hint: "[topic, brain dump, or meeting notes]"
 ---
 
@@ -21,7 +21,7 @@ Get everything out of your head and into one place. Pull in what NSLS already kn
 
 - Building a new automation → use `/interrogate` (produces DESIGN.md + project scaffolding)
 - Defining a concept without a name → use `/full-shape`
-- Software feature work → use `ce:brainstorm` from compound-engineering
+- Software feature work → use `/ce-brainstorm` from Compound Engineering
 - Simple how-to questions → just answer directly
 
 ## Process

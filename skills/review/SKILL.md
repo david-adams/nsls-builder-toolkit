@@ -18,7 +18,7 @@ Run two reviewers in parallel. Surface what would embarrass you in front of a sk
 
 ## When NOT to Use
 
-- Code review → `ce-code-review` or `/review`
+- Code review → `/ce-code-review` or `/code-review`
 - Security audit → `/security-review`
 - Plan still in "ideas" stage → run `/kw:plan` first, then review the structured output
 

@@ -1,6 +1,6 @@
 ---
 name: kw:plan
-description: "Research what NSLS already knows, then structure a plan grounded in LOPs and past learning. Use after /kw:brainstorm when ready to commit to a direction, or when starting a strategy doc, campaign plan, research synthesis, brief, or operational playbook. Trigger phrases: plan, kw:plan, /kw:plan, structure this, write a plan, plan the X, need a brief for, make a strategy for. This is for strategic/knowledge work — NOT for new automations (use /interrogate) and NOT for software features (use ce:plan)."
+description: "Research what NSLS already knows, then structure a plan grounded in LOPs and past learning. Use whenever someone asks to plan, write a plan, or draft a brief or strategy for NSLS work: load this skill first, before starting any document or artifact, because it pulls in what NSLS already knows, and the finished plan can become a doc afterwards. Also use after /kw:brainstorm when ready to commit to a direction, or for a campaign plan, research synthesis or operational playbook. Trigger phrases: plan, write a plan, help me plan, let's plan, plan the X, structure this, I need a brief for, draft a brief, make a strategy for, kw:plan, /kw:plan. This is for strategic/knowledge work — NOT for new automations (use /interrogate) and NOT for software features (use /ce-plan)."
 argument-hint: "[what to plan]"
 ---
 
@@ -19,7 +19,7 @@ Research what NSLS already knows, then structure a plan grounded in LOPs and dat
 ## When NOT to Use
 
 - Building a new automation → `/interrogate`
-- Software feature work → `ce:plan`
+- Software feature work → `/ce-plan`
 - One-off how-to question → just answer
 
 ## Process
