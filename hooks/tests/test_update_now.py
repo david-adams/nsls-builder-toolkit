@@ -166,6 +166,37 @@ with tempfile.TemporaryDirectory() as tmp:
           "now on version 3.7.0" in out and "already up to date" not in out, out)
 
 with tempfile.TemporaryDirectory() as tmp:
+    # Nothing released, but the registry carries no commit and the clone no
+    # version: "up to date" would be a guess.
+    cfg, log, env = machine(tmp)
+    reg = cfg / "plugins" / "installed_plugins.json"
+    d = json.loads(reg.read_text())
+    d["plugins"][PLUGIN_KEY][0].pop("gitCommitSha")
+    reg.write_text(json.dumps(d))
+    out = run(env)
+    check("unverifiable commit: never 'up to date'",
+          "already up to date" not in out and "could not be verified" in out, out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # Same, but the clone carries the installed version: that IS evidence.
+    cfg, log, env = machine(tmp)
+    reg = cfg / "plugins" / "installed_plugins.json"
+    d = json.loads(reg.read_text())
+    d["plugins"][PLUGIN_KEY][0].pop("gitCommitSha")
+    reg.write_text(json.dumps(d))
+    market = cfg / "plugins" / "marketplaces" / "nsls-toolkit"
+    (market / ".claude-plugin").mkdir()
+    (market / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": "3.6.0"}))
+    out = run(env)
+    check("no commit but the clone carries the installed version: up to date", "already up to date" in out, out)
+
+src = (HOOKS / "session-start.py").read_text(encoding="utf-8")
+import re as _re
+stale = int(_re.search(r"^HEAL_LOCK_STALE_S = (\d+)", src, _re.M).group(1))
+upd = int(_re.search(r"^UPDATE_NOW_TIMEOUT_S = (\d+)", src, _re.M).group(1))
+check("the lock outlives the longest holder (update now + its 60s heal)", stale > upd + 60)
+
+with tempfile.TemporaryDirectory() as tmp:
     cfg, log, env = machine(tmp, installed=False)
     out = run(env)
     check("not a plugin install: says there is nothing to update", "not installed as a Claude Code plugin" in out, out)

@@ -1391,7 +1391,11 @@ def _plugin_cache_root():
     return (CONFIG_DIR / "plugins" / "cache").resolve()
 
 
-HEAL_LOCK_STALE_S = 180  # longer than any heal can run (45s budget) with margin
+# Longer than any holder can run, with margin: session start holds it for at
+# most 45s (update 20 + heal 25); "update my NSLS toolkit" for up to 180s
+# (update 120 + heal 60). A threshold at or under 180 would let a second request
+# break the lock while the first is mid-reinstall.
+HEAL_LOCK_STALE_S = 300
 
 
 def _acquire_heal_lock():
@@ -1978,6 +1982,14 @@ def update_now():
                   "tell the NSLS AI team.")
             return
         version = f" version {after['version']}" if after["version"] != "?" else " the latest version"
+        if before is not None and before["installPath"] == after["installPath"] \
+                and not (head and _is_current(after, head)):
+            # Same install as before, and nothing proves it is the published
+            # commit (no commit in the registry, or no readable clone).
+            print("The update ran, but whether this is the newest release could not "
+                  "be verified. Suggest opening a new session; if the skill is still "
+                  "missing, tell the NSLS AI team.")
+            return
         if before is None:
             print(f"The NSLS toolkit is now on{version}. This session keeps whatever "
                   f"it started with: tell the builder in one plain sentence to open a "
