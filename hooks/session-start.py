@@ -1655,11 +1655,13 @@ def _hook_elapsed():
 
     The Windows .ps1 pulls, syncs pointers and pings before it starts Python, so
     it passes its own start time (whole Unix seconds, which no locale can
-    reformat). Anything absent or implausible falls back to this process's start.
+    reformat), fresh on every run. Past HOOK_BUDGET_S is taken at its word: the
+    hook is out of time, so nothing slow starts. Only an absent, unreadable or
+    future value falls back to this process's start.
     """
     try:
         elapsed = time.time() - float(os.environ.get("NSLS_HOOK_STARTED_AT", ""))
-        if 0 <= elapsed <= HOOK_BUDGET_S:
+        if elapsed >= 0:
             return elapsed
     except ValueError:
         pass
