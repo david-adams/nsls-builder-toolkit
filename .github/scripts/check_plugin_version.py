@@ -50,7 +50,7 @@ SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 # Distribution still works: ensure_plugin_fresh() in hooks/session-start.py
 # compares the installed COMMIT against the marketplace HEAD, not just the
 # version string, and reinstalls on drift — so an unbumped context merge still
-# reaches builders within a day. That commit check is the backstop this
+# reaches builders at their next session start. That commit check is the backstop this
 # exemption leans on; if it is ever removed, this exemption has to go with it.
 CONTEXT_ONLY_PREFIX = "_shared/context/"
 

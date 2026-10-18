@@ -46,9 +46,10 @@ The install script sets up three things:
 
 ## Every PR to main bumps the plugin version
 
-Builders run this toolkit from a **version-pinned plugin cache**. Their daily
-`claude plugin update` compares the version string in `.claude-plugin/plugin.json`
-and nothing else — a merge that leaves it alone is a merge nobody receives. The
+Builders run this toolkit from a **version-pinned plugin cache**. Each session start
+asks GitHub whether main has moved and, when it has, runs `claude plugin update`,
+which compares the version string in `.claude-plugin/plugin.json` and nothing
+else — a merge that leaves it alone is a merge nobody receives. The
 `plugin-version-bump` check (required on `main`) refuses a PR whose version is not
 strictly greater than main's. Patch for fixes, minor for a new skill or behavior,
 major for breaking changes to how builders install or use the toolkit.

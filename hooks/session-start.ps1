@@ -7,6 +7,11 @@
 # Fast and silent on failure. Registered in settings.json by install.ps1.
 $ErrorActionPreference = 'SilentlyContinue'
 
+# When this hook started, for the plugin update in step 4: Python decides there
+# whether enough of the 90-second hook limit is left to run it. Whole Unix
+# seconds, so no locale can turn the number into "1792269584,5".
+$env:NSLS_HOOK_STARTED_AT = [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+
 $ClaudeDir   = Join-Path $env:USERPROFILE '.claude'
 $SkillsDir   = Join-Path $ClaudeDir 'skills'
 $LocalDir    = Join-Path $ClaudeDir 'local-plugins'

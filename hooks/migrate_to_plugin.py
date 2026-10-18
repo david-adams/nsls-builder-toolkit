@@ -692,8 +692,8 @@ def _clone_version():
 def _catch_up_plugin():
     """Update a plugin whose own copy can no longer update itself.
 
-    session-start.py's ensure_plugin_fresh runs `plugin update` once a day, but
-    with the CLI finder of whatever plugin copy is installed. When that finder
+    session-start.py's ensure_plugin_fresh runs `plugin update` when main moves,
+    but with the CLI finder of whatever plugin copy is installed. When that finder
     goes blind (the Store app moved its CLI into a hash folder on 2026-10-03),
     the copy can never fetch the release that fixes it: the test PC sat on
     3.16.2 for days while its checkout was on 3.16.13 (PC Test Round 5). This
