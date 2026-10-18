@@ -2388,6 +2388,23 @@ def _collector_backed():
         return False
 
 
+def _running_toolkit_version():
+    """The version of the toolkit copy this file belongs to, or None.
+
+    Read from this copy's own plugin.json: in a plugin install that is the
+    version this session loaded, which is what "who is behind main" needs. Only
+    a value shaped like a version is sent.
+    """
+    try:
+        manifest = Path(__file__).resolve().parents[1] / ".claude-plugin" / "plugin.json"
+        version = json.loads(manifest.read_text(encoding="utf-8-sig")).get("version")
+        if isinstance(version, str) and re.fullmatch(r"\d{1,5}\.\d{1,5}\.\d{1,5}", version):
+            return version
+    except Exception:
+        pass
+    return None
+
+
 def session_ping(replayed=None):
     """Ping the automation tracker for points, PR credits, and announcements.
 
@@ -2424,6 +2441,11 @@ def session_ping(replayed=None):
         "github_username": github,
         "platform": platform,
     }
+    # Which toolkit version this session runs, so the tracker can show who is
+    # behind main and how long a release takes to reach people.
+    version = _running_toolkit_version()
+    if version:
+        body["toolkit_version"] = version
     if _collector_backed():
         # The usage collector already reports this machine's daily session, so
         # the tracker skips ONLY that credit. PR credit, install tracking,

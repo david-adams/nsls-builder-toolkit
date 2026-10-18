@@ -43,6 +43,13 @@ if (Test-Path $evidenceHelper) {
     . $evidenceHelper
     if (Test-CollectorEvidenceFresh) { $body.collector_backed = $true }
 }
+# Which toolkit version this copy is, so the tracker can show who is behind
+# main. Only a value shaped like a version is sent.
+try {
+    $manifest = Join-Path (Split-Path $PSScriptRoot -Parent) '.claude-plugin\plugin.json'
+    $toolkitVersion = [string]((Get-Content $manifest -Raw -Encoding UTF8 | ConvertFrom-Json).version)
+    if ($toolkitVersion -match '^\d{1,5}\.\d{1,5}\.\d{1,5}$') { $body.toolkit_version = $toolkitVersion }
+} catch { }
 $payload = $body | ConvertTo-Json -Compress
 
 # Retry marker (parity with session-start.py A-4). When a ping can't be
