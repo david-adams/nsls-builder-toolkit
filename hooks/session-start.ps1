@@ -7,10 +7,20 @@
 # Fast and silent on failure. Registered in settings.json by install.ps1.
 $ErrorActionPreference = 'SilentlyContinue'
 
+# --- hook start time ---
 # When this hook started, for the plugin update in step 4: Python decides there
 # whether enough of the 90-second hook limit is left to run it. Whole Unix
-# seconds, so no locale can turn the number into "1792269584,5".
-$env:NSLS_HOOK_STARTED_AT = [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+# seconds, so no locale can turn the number into "1792269584,5". A copy that
+# re-runs itself after pulling an update (step 1) passes its environment on, so
+# a start time from the last 90 seconds is kept: the re-run spends the same
+# 90 seconds, not a fresh allowance.
+$hookNow = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$hookStarted = 0L
+if (-not ([long]::TryParse("$env:NSLS_HOOK_STARTED_AT", [ref]$hookStarted) -and
+          ($hookNow - $hookStarted) -ge 0 -and ($hookNow - $hookStarted) -le 90)) {
+    $env:NSLS_HOOK_STARTED_AT = [string]$hookNow
+}
+# --- end hook start time ---
 
 $ClaudeDir   = Join-Path $env:USERPROFILE '.claude'
 $SkillsDir   = Join-Path $ClaudeDir 'skills'

@@ -1700,6 +1700,31 @@ def _published_head():
     return sha if _SHA40.match(sha) else None
 
 
+def _marketplace_version():
+    """The version in the marketplace clone's plugin.json, validated, or None."""
+    try:
+        manifest = (CONFIG_DIR / "plugins" / "marketplaces" / ORG_MARKETPLACE
+                    / ".claude-plugin" / "plugin.json")
+        version = json.loads(manifest.read_text(encoding="utf-8-sig")).get("version")
+        return version if isinstance(version, str) and _PLUGIN_VERSION.match(version) else None
+    except Exception:
+        return None
+
+
+def _is_current(record, published):
+    """True only on evidence that the install IS the published release.
+
+    With a commit in the registry, that commit decides. Without one (older CLI
+    registries), the marketplace clone must sit at the published commit AND
+    carry the installed version; a clone refreshed by something else (say
+    `claude plugin marketplace update`) over a stale install is not evidence.
+    """
+    if record["sha"]:
+        return record["sha"] == published
+    return (_marketplace_head() == published and record["version"] != "?"
+            and record["version"] == _marketplace_version())
+
+
 def _skill_names(install_path):
     """The skill names an install carries (frontmatter `name:`, else the folder
     name), keeping only names that look like skill names. None if unreadable."""
@@ -1794,7 +1819,7 @@ def ensure_plugin_fresh(reserve=MAIN_RESERVE_S):
         published = _published_head() if record else None
         if not published:
             return  # not a plugin machine, or offline: the stamp retries later
-        if (record["sha"] or _marketplace_head()) == published:
+        if _is_current(record, published):
             return  # level: no CLI call at all
         claude = _find_claude()
         if not claude:
@@ -1817,7 +1842,7 @@ def _update_and_heal(claude, published, reserve):
     """Under the lock: update, announce any new skills, then heal drift."""
     # Re-read under the lock: another session may have just done all of this.
     before = _installed_plugin_record()
-    if not before or (before["sha"] or _marketplace_head()) == published:
+    if not before or _is_current(before, published):
         return
     old_skills = _skill_names(before["installPath"])
     try:
@@ -1844,17 +1869,18 @@ def _update_and_heal(claude, published, reserve):
 
     head = _marketplace_head()
     if not record or not record["sha"] or not head or record["sha"] == head:
-        if not record or (record["sha"] or head) != published:
+        if not record or not _is_current(record, published):
             # The update ran and the machine is still not on the published
             # commit: a marketplace the CLI will not move. Do not repeat a no-op
             # update every ten minutes.
             _set_fresh_stamp(time.time() + FRESH_RETRY_AFTER_TROUBLE_S)
         return  # level, or not enough evidence to act on
-    left = HOOK_BUDGET_S - _hook_elapsed() - reserve
-    if left <= 0:
+    # The heal starts by uninstalling, so it starts only with its whole budget
+    # left: cut off halfway, it would leave the machine with no toolkit.
+    if HOOK_BUDGET_S - _hook_elapsed() - reserve < HEAL_TIMEOUT_S:
         _set_fresh_stamp(time.time())  # the next session heals
         return
-    deadline = time.monotonic() + min(HEAL_TIMEOUT_S, left)
+    deadline = time.monotonic() + HEAL_TIMEOUT_S
     if _heal_and_announce(claude, record, head, deadline) and not announced:
         # A release that merged without a version bump arrives through the
         # reinstall, not the update, and can carry new skills too.

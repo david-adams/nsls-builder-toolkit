@@ -572,6 +572,42 @@ with tempfile.TemporaryDirectory() as tmp:
     out = run_hook(m)
     check("unbumped, no new skills: only the refresh notice", "refreshed" in out.lower() and "New in the NSLS toolkit" not in out)
 
+# --- the heal uninstalls first: never start it without its whole budget ------
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    # Enough time for the update (20s + the 45s reserve), not for the 25s heal.
+    m.env["NSLS_HOOK_STARTED_AT"] = str(int(time.time()) - 22)
+    out = run_hook(m)
+    check("short heal budget: the update ran", m.calls() == [f"plugin update {PLUGIN_KEY}"])
+    check("short heal budget: no uninstall started", not any("uninstall" in c for c in m.calls()))
+    check("short heal budget: still installed", m.registry_sha() == OLD)
+    check("short heal budget: the next session heals", stamp_left(m) <= 0)
+    check("short heal budget: silent", out.strip() == "")
+
+# --- no commit in the registry: the version decides, never the clone alone -----
+def clone_version(m, version):
+    market = m.config / "plugins" / "marketplaces" / "nsls-toolkit"
+    (market / ".claude-plugin").mkdir(exist_ok=True)
+    (market / ".claude-plugin" / "plugin.json").write_text(json.dumps({"version": version}))
+    git(market, "add", "-A")
+    git(market, "commit", "-q", "-m", "release")
+    m.head = subprocess.run(["git", "-C", str(market), "rev-parse", "HEAD"],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    m.env["FAKE_HEAD"] = m.head
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp, installed_sha="not-a-sha")
+    clone_version(m, "3.7.0")  # the clone is current, the install is not
+    run_hook(m)
+    check("unknown commit, clone ahead of the install: the update runs",
+          any(c.startswith("plugin update") for c in m.calls()))
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp, installed_sha="not-a-sha")
+    clone_version(m, "3.6.0")  # clone current and carrying the installed version
+    out = run_hook(m)
+    check("unknown commit, clone carries the installed version: no CLI call", m.calls() == [])
+
 # --- the update is too slow here: give up for 2 hours, not for a day ------------
 with tempfile.TemporaryDirectory() as tmp:
     m = Machine(tmp)
