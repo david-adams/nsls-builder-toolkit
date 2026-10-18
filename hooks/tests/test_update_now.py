@@ -40,6 +40,10 @@ FAKE_CLAUDE = textwrap.dedent('''\
     if args[:2] == ["plugin", "update"]:
         if os.environ.get("FAKE_UPDATE_FAILS"):
             sys.exit(1)
+        if os.environ.get("FAKE_DROP_RECORD"):
+            reg = Path(os.environ["FAKE_REGISTRY"])
+            reg.write_text(json.dumps({"version": 2, "plugins": {"nsls-builder-toolkit@nsls-toolkit": []}}))
+            sys.exit(0)
         new_path = os.environ.get("FAKE_NEW_PATH")
         if new_path:
             for name in os.environ["FAKE_NEW_SKILLS"].split(","):
@@ -141,6 +145,25 @@ with tempfile.TemporaryDirectory() as tmp:
     (cfg / ".nsls-plugin-heal.lock").write_text("123")
     out = run(env)
     check("another session updating: says so, no update call", "Another Claude session" in out and log.read_text() == "", out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    cfg, log, env = machine(tmp, release=["quicknote"])
+    env["FAKE_DROP_RECORD"] = "1"
+    out = run(env)
+    check("record unreadable after the update: never 'up to date'",
+          "already up to date" not in out and "could not be checked" in out, out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # A project-scope install only: the plugin is there, but no user-scope
+    # record to compare against before the update.
+    cfg, log, env = machine(tmp, release=["alpha", "beta", "quicknote"])
+    reg = cfg / "plugins" / "installed_plugins.json"
+    d = json.loads(reg.read_text())
+    d["plugins"][PLUGIN_KEY][0]["scope"] = "project"
+    reg.write_text(json.dumps(d))
+    out = run(env)
+    check("no record before the update: reports the new version, not 'up to date'",
+          "now on version 3.7.0" in out and "already up to date" not in out, out)
 
 with tempfile.TemporaryDirectory() as tmp:
     cfg, log, env = machine(tmp, installed=False)

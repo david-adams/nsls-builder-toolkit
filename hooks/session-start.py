@@ -1970,10 +1970,22 @@ def update_now():
             _heal_and_announce(claude, after, head, time.monotonic() + 60)
             return
         _set_fresh_stamp(time.time() + FRESH_CHECK_INTERVAL_S)
-        if not (before and after and before["installPath"] != after["installPath"]):
-            version = f" (version {after['version']})" if after and after["version"] != "?" else ""
-            print(f"The NSLS toolkit is already up to date{version}. If a skill the "
-                  f"builder expected is missing, it has probably not been released yet.")
+        if after is None:
+            # The CLI said yes but left no record we can read: never call that
+            # "up to date".
+            print("The update ran, but the installed version could not be checked. "
+                  "Suggest opening a new session; if the skill is still missing, "
+                  "tell the NSLS AI team.")
+            return
+        version = f" version {after['version']}" if after["version"] != "?" else " the latest version"
+        if before is None:
+            print(f"The NSLS toolkit is now on{version}. This session keeps whatever "
+                  f"it started with: tell the builder in one plain sentence to open a "
+                  f"new session to use it.")
+            return
+        if before["installPath"] == after["installPath"]:
+            print(f"The NSLS toolkit is already up to date ({version.strip()}). If a skill "
+                  f"the builder expected is missing, it has probably not been released yet.")
             return
         old, new = _skill_names(before["installPath"]), _skill_names(after["installPath"])
         added = sorted(new - old) if old and new is not None else []
