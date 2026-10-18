@@ -639,7 +639,23 @@ with tempfile.TemporaryDirectory() as tmp:
     check("windows reserve: and announces", "/quicknote" in out)
 
 with tempfile.TemporaryDirectory() as tmp:
-    # A start time from the future or from long ago is not this hook's.
+    # The .ps1 spent more than the whole 90 seconds: out of time, nothing starts
+    # (it used to fall back to Python's own age and update anyway).
+    m = Machine(tmp)
+    new_release(m, ["quicknote"])
+    m.env["NSLS_HOOK_STARTED_AT"] = str(int(time.time()) - 120)
+    out = run_hook(m, reserve=5)
+    check("past the 90 seconds: no CLI call", m.calls() == [])
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta", "quicknote"])
+    m.env["NSLS_HOOK_STARTED_AT"] = str(int(time.time()) + 600)
+    out = run_hook(m)
+    check("a start time in the future falls back to this process's start", "/quicknote" in out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # An unreadable start time is not this hook's.
     m = Machine(tmp)
     new_release(m, ["alpha", "kw:beta", "quicknote"])
     m.env["NSLS_HOOK_STARTED_AT"] = "1,5"
