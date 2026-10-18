@@ -228,8 +228,30 @@ with tempfile.TemporaryDirectory() as tmp:
     real_python3 = shutil.which("python3") or sys.executable
     lenv = dict(os.environ)
     # The stub aliases come FIRST, so a probe that accepts exit 0 picks one.
+    # The suite's own git comes before /usr/bin. Without it, on a macOS runner
+    # `git` became the Xcode shim in /usr/bin, a different git from every other
+    # check in this file, and every git call the gate makes has a 2-second cap
+    # and fails open. This check flaked on macOS CI ten times in a week
+    # (2026-10-11 to 10-18) while the interpreter it is about was always the
+    # real one (the cache check below passed each time).
+    real_git = shutil.which("git")
     lenv["PATH"] = os.pathsep.join(
-        [str(fake_bin), os.path.dirname(real_python3), "/usr/bin", "/bin"])
+        [str(fake_bin), os.path.dirname(real_python3)]
+        + ([os.path.dirname(real_git)] if real_git else [])
+        + ["/usr/bin", "/bin"])
+    # Evidence for the line above, printed every run: which git each PATH
+    # finds and how long a first call to it takes on this machine.
+    for label, path in (("suite PATH", os.environ.get("PATH", "")),
+                        ("old test PATH", os.pathsep.join([os.path.dirname(real_python3),
+                                                           "/usr/bin", "/bin"]))):
+        found = shutil.which("git", path=path)
+        started = time.monotonic()
+        try:
+            subprocess.run([found or "git", "rev-parse", "--show-toplevel"], cwd=repo,
+                           capture_output=True, timeout=30)
+        except Exception:
+            pass
+        print(f"  info git on the {label}: {found} ({time.monotonic() - started:.2f}s)")
     lenv["CLAUDE_CONFIG_DIR"] = str(launcher_cfg)
     lenv["CLAUDE_PLUGIN_ROOT"] = str(ROOT)
     lenv["NSLS_GUARDRAIL_EVENT_LOG"] = str(Path(tmp) / "launcher-ev")
