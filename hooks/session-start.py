@@ -1923,6 +1923,72 @@ def _heal_and_announce(claude, record, head, deadline):
     return False
 
 
+UPDATE_NOW_TIMEOUT_S = 120
+
+
+def update_now():
+    """"Update my NSLS toolkit": the same update as session start, on request.
+
+    Run by the update-toolkit skill through `run-hook.sh update`, never at
+    session start, so it is not bound by the hook's 90 seconds and needs no
+    throttle. Prints plain sentences for Claude to pass on. Like the
+    session-start path, it echoes only our own words, validated versions and
+    validated skill names.
+    """
+    if not org_plugin_installed():
+        print("The NSLS toolkit is not installed as a Claude Code plugin on this "
+              "machine, so there is nothing to update this way. Its folder copy "
+              "already updates itself at every session start.")
+        return
+    claude = _find_claude()
+    if not claude:
+        print("Could not update: the claude command was not found on this machine. "
+              "Suggest the builder tell the NSLS AI team.")
+        return
+    lock = _acquire_heal_lock()
+    if lock is None:
+        print("Another Claude session is updating the NSLS toolkit right now. "
+              "Try again in a minute.")
+        return
+    try:
+        before = _installed_plugin_record()
+        try:
+            updated = subprocess.run(
+                [*claude, "plugin", "update", ORG_PLUGIN_KEY],
+                capture_output=True, timeout=UPDATE_NOW_TIMEOUT_S, stdin=subprocess.DEVNULL,
+            ).returncode == 0
+        except Exception:
+            updated = False
+        if not updated:
+            print("The update did not finish. The usual cause is no internet "
+                  "connection; try again in a few minutes.")
+            return
+        after = _installed_plugin_record()
+        head = _marketplace_head()
+        if after and after["sha"] and head and after["sha"] != head:
+            # Same version, different commit: the reinstall says what happened.
+            _heal_and_announce(claude, after, head, time.monotonic() + 60)
+            return
+        _set_fresh_stamp(time.time() + FRESH_CHECK_INTERVAL_S)
+        if not (before and after and before["installPath"] != after["installPath"]):
+            version = f" (version {after['version']})" if after and after["version"] != "?" else ""
+            print(f"The NSLS toolkit is already up to date{version}. If a skill the "
+                  f"builder expected is missing, it has probably not been released yet.")
+            return
+        old, new = _skill_names(before["installPath"]), _skill_names(after["installPath"])
+        added = sorted(new - old) if old and new is not None else []
+        shown = ", ".join(f"/{n}" for n in added[:5]) + (
+            f" and {len(added) - 5} more" if len(added) > 5 else "")
+        frm = f" from version {before['version']}" if before["version"] != "?" else ""
+        to = f" to version {after['version']}" if after["version"] != "?" else ""
+        print(f"Updated the NSLS toolkit{frm}{to}."
+              + (f" New skills: {shown}." if added else "")
+              + " This session keeps the old version: tell the builder in one plain "
+                "sentence to open a new session to use the update.")
+    finally:
+        _release_heal_lock(lock)
+
+
 def sync_pointers():
     """Sync skill pointers from installed plugins to ~/.claude/skills/.
 
@@ -2990,4 +3056,9 @@ if __name__ == "__policy__":
         pass
 
 if __name__ == "__main__":
-    main()
+    # `run-hook.sh update` (the update-toolkit skill) arrives with this flag.
+    if sys.argv[1:2] == ["--update-now"]:
+        _utf8_stdio()
+        update_now()
+    else:
+        main()
