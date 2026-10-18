@@ -1,11 +1,12 @@
 {
-  "generatedAt": "2026-09-15T19:20:05.416Z",
-  "commit": "59c59167",
+  "generatedAt": "2026-09-30T15:11:47.082Z",
+  "commit": "8c0590fb",
   "fieldTypes": {
     "declared": [
       "assessment-results",
       "banner",
       "banner-multiple",
+      "birth-date",
       "career-segment",
       "celebration",
       "checkbox",
@@ -21,6 +22,7 @@
       "multi-checkbox",
       "multi-select",
       "multi-select-list",
+      "name",
       "number",
       "profile-avatar",
       "radio",
@@ -38,6 +40,7 @@
       "assessment-results",
       "banner",
       "banner-multiple",
+      "birth-date",
       "career-segment",
       "celebration",
       "currency",
@@ -50,12 +53,14 @@
       "multi-checkbox",
       "multi-select",
       "multi-select-list",
+      "name",
       "profile-avatar",
       "radio",
       "resume-upload",
       "select",
       "select-with-custom-time",
       "text",
+      "textarea",
       "time",
       "wheel",
       "work"
@@ -102,7 +107,9 @@
       "assessment-results": null,
       "career-segment": null,
       "resume-upload": null,
-      "profile-avatar": null
+      "profile-avatar": null,
+      "name": null,
+      "birth-date": null
     }
   },
   "runtimeCapabilities": {
