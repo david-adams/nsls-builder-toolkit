@@ -15,6 +15,11 @@ The hook therefore compares the COMMIT the registry says is installed with the
 HEAD of the marketplace clone the CLI just refreshed. Same version, different
 commit = drift, and the fix is uninstall, drop the cache dir, install.
 
+Since 3.29.0 the update is no longer daily: every session (at most once per ten
+minutes) asks the marketplace clone's remote for its latest commit, and runs
+`plugin update` only when that differs from the installed one. In these tests
+the clone is its own `origin`, so "published" is the clone's HEAD.
+
 Every CLI call here goes to a fake `claude` on PATH that records what it was
 asked and edits the registry the way the real one does. No network, no real
 install touched.
@@ -65,7 +70,24 @@ FAKE_CLAUDE = textwrap.dedent('''\
     Path(os.environ["FAKE_LOG"]).open("a").write(" ".join(args) + "\\n")
     reg = Path(os.environ["FAKE_REGISTRY"])
     if args[:2] == ["plugin", "update"]:
-        sys.exit(int(os.environ.get("FAKE_UPDATE_FAILS", "0")))
+        import time
+        time.sleep(float(os.environ.get("FAKE_UPDATE_SLEEP", "0")))
+        rc = int(os.environ.get("FAKE_UPDATE_FAILS", "0"))
+        new_path = os.environ.get("FAKE_NEW_PATH")
+        if not rc and new_path:
+            # A real release: a new version directory with its skills, and the
+            # registry pointed at it, the way the real CLI leaves things.
+            for name in os.environ.get("FAKE_NEW_SKILLS", "").split(","):
+                if name:
+                    d = Path(new_path) / "skills" / name
+                    d.mkdir(parents=True, exist_ok=True)
+                    (d / "SKILL.md").write_text(f"---\\nname: {name}\\ndescription: x\\n---\\nbody\\n")
+            d = json.loads(reg.read_text())
+            d["plugins"]["nsls-builder-toolkit@nsls-toolkit"] = [{
+                "scope": "user", "version": os.environ["FAKE_NEW_VERSION"],
+                "installPath": new_path, "gitCommitSha": os.environ["FAKE_HEAD"]}]
+            reg.write_text(json.dumps(d))
+        sys.exit(rc)
     if args[:2] == ["plugin", "uninstall"]:
         d = json.loads(reg.read_text()); d["plugins"].pop("nsls-builder-toolkit@nsls-toolkit", None)
         reg.write_text(json.dumps(d))
@@ -105,14 +127,19 @@ class Machine:
             self.config / "plugins" / "cache" / "nsls-toolkit" / "nsls-builder-toolkit" / version)
         self.install_path.mkdir(parents=True, exist_ok=True)
         (self.install_path / "stale").write_text("1")
+        for name in ("alpha", "kw:beta"):
+            d = self.install_path / "skills" / name.replace(":", "-")
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: x\n---\n")
         if with_registry:
             self.registry.write_text(json.dumps({"version": 1, "plugins": {PLUGIN_KEY: [{
                 "scope": "user", "version": version, "installPath": str(self.install_path),
                 "gitCommitSha": installed_sha}]}}))
         (self.config / "settings.json").write_text(json.dumps({"enabledPlugins": {PLUGIN_KEY: True}}))
-        self.marker = self.config / ".nsls-plugin-update-check"
+        self.marker = self.config / ".nsls-plugin-update-check"  # legacy daily marker
+        self.stamp = self.config / ".nsls-plugin-fresh-check"
         if marker_fresh:
-            self.marker.touch()
+            self.stamp.write_text(f"{time.time() + 300:.0f}\n")
 
         self.head = None
         market = self.config / "plugins" / "marketplaces" / "nsls-toolkit"
@@ -124,6 +151,8 @@ class Machine:
             (market / "f").write_text("1")
             git(market, "add", "-A")
             git(market, "commit", "-q", "-m", "c")
+            # Its own origin: `ls-remote origin` then answers with this HEAD.
+            git(market, "remote", "add", "origin", str(market))
             self.head = subprocess.run(["git", "-C", str(market), "rev-parse", "HEAD"],
                                        capture_output=True, text=True, check=True).stdout.strip()
 
@@ -153,18 +182,37 @@ class Machine:
             return None
 
 
-def run_hook(machine):
+def stamp_left(m):
+    """Seconds until the next allowed check, from the stamp file (-1e9 if none)."""
+    try:
+        return float(m.stamp.read_text().strip()) - time.time()
+    except Exception:
+        return -1e9
+
+
+def new_release(m, skills, version="3.7.0"):
+    """Make the fake `plugin update` install `version` with these skill names."""
+    new_path = m.config / "plugins" / "cache" / "nsls-toolkit" / "nsls-builder-toolkit" / version
+    m.env.update({"FAKE_NEW_PATH": str(new_path), "FAKE_NEW_VERSION": version,
+                  "FAKE_NEW_SKILLS": ",".join(skills)})
+    return new_path
+
+
+def run_hook(machine, overrides=None, **kwargs):
     """Load a fresh copy of the hook under the machine's env and run
-    ensure_plugin_fresh, returning what it printed to stdout."""
+    ensure_plugin_fresh, returning what it printed to stdout. `overrides` sets
+    module attributes (a short update timeout, say) before the call."""
     saved = {k: os.environ.get(k) for k in machine.env}
     os.environ.update(machine.env)
     try:
         spec = importlib.util.spec_from_file_location("session_start_hook_drift", HOOK)
         hook = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(hook)
+        for k, v in (overrides or {}).items():
+            setattr(hook, k, v)
         buf = io.StringIO()
         with redirect_stdout(buf):
-            hook.ensure_plugin_fresh()
+            hook.ensure_plugin_fresh(**kwargs)
         return buf.getvalue()
     finally:
         for k, v in saved.items():
@@ -184,12 +232,12 @@ with tempfile.TemporaryDirectory() as tmp:
         "gitCommitSha": m.head}]}}))
     out = run_hook(m)
     calls = m.calls()
-    check("level: update still runs daily", any(c.startswith("plugin update") for c in calls))
+    check("level: no CLI call at all (the common case costs one ls-remote)", calls == [])
     check("level: no uninstall", not any("uninstall" in c for c in calls))
     check("level: no install", not any(c.startswith("plugin install") for c in calls))
     check("level: nothing printed", out.strip() == "")
     check("level: stale cache dir untouched", (m.install_path / "stale").exists())
-    check("level: daily marker touched", m.marker.exists())
+    check("level: next check claimed ~10 minutes out", 500 < stamp_left(m) <= 600)
 
 # --- drift: same version, different commit -----------------------------------
 with tempfile.TemporaryDirectory() as tmp:
@@ -208,7 +256,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("drift: names both commits", OLD[:7] in out and m.head[:7] in out)
     check("drift: says a new session is needed", "next session" in out.lower() or "new session" in out.lower())
     check("drift: does not cry wolf as a WARNING", "WARNING" not in out)
-    check("drift: daily marker touched", m.marker.exists())
+    check("drift: legacy daily marker touched, so the migration's rescue stays quiet", m.marker.exists())
 
 # --- drift: first install attempt fails, retry succeeds ----------------------
 with tempfile.TemporaryDirectory() as tmp:
@@ -227,7 +275,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("failed: says the plugin is not installed right now",
           "not installed" in out.lower() or "uninstalled" in out.lower())
     check("failed: gives the manual install command", f"claude plugin install {PLUGIN_KEY}" in out)
-    check("failed: marker removed so next session retries", not m.marker.exists())
+    check("failed: stamp cleared so the next session retries", stamp_left(m) <= 0)
     check("failed: gave up after a bounded number of attempts",
           sum(c == f"plugin install {PLUGIN_KEY}" for c in m.calls()) <= 3)
 
@@ -241,6 +289,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("update failed: no install", not any(c.startswith("plugin install") for c in calls))
     check("update failed: still installed at the old commit", m.registry_sha() == OLD)
     check("update failed: silent (offline is not an incident)", out.strip() == "")
+    check("update failed: retried in 2 hours, not every session", 7000 < stamp_left(m) <= 7200)
 
 # --- no time left: the heal must not start (an uninstall it cannot finish) --
 with tempfile.TemporaryDirectory() as tmp:
@@ -271,6 +320,7 @@ with tempfile.TemporaryDirectory() as tmp:
     lock = m.config / ".nsls-plugin-heal.lock"
     lock.write_text("12345")
     out = run_hook(m)
+    check("lock held: no update either, the holder is doing it", m.calls() == [])
     check("lock held: no uninstall", not any("uninstall" in c for c in m.calls()))
     check("lock held: silent (the holder announces)", out.strip() == "")
     check("lock held: lock left for its owner", lock.exists())
@@ -336,7 +386,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 os.environ[k] = v
     check("windows entry: drift healed", m.registry_sha() == m.head)
     check("windows entry: refresh announced", "refreshed" in out.lower())
-    check("windows entry: daily marker touched", m.marker.exists())
+    check("windows entry: check stamp written", stamp_left(m) > 0)
 
 # --- locating `claude` where the installer looks, not only on PATH ------------
 with tempfile.TemporaryDirectory() as tmp:
@@ -443,7 +493,7 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     m = Machine(tmp, marker_fresh=True)
     out = run_hook(m)
-    check("fresh daily marker: nothing runs", m.calls() == [] and out.strip() == "")
+    check("fresh check stamp: nothing runs", m.calls() == [] and out.strip() == "")
 
 with tempfile.TemporaryDirectory() as tmp:
     # `$` would accept this; a corrupt value must read as unknown, not as drift.
@@ -472,6 +522,96 @@ with tempfile.TemporaryDirectory() as tmp:
     m = Machine(tmp)
     out = run_hook(m)
     check("announcement carries no git output", "fatal" not in out and "remote:" not in out)
+
+# --- a real release: announce new skills, in one line, and only new ones -------
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta", "quicknote"])
+    out = run_hook(m)
+    calls = m.calls()
+    check("release: one update, no reinstall", calls == [f"plugin update {PLUGIN_KEY}"])
+    check("release: names the new skill", "/quicknote" in out)
+    check("release: does not list skills that were already there", "/alpha" not in out and "/kw:beta" not in out)
+    check("release: tells the builder to open a new session", "Open a new session to use it." in out)
+    check("release: names the version", "version 3.7.0" in out)
+    check("release: a single line", len([l for l in out.splitlines() if l.strip()]) == 1)
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta"])
+    out = run_hook(m)
+    check("fix-only release: updated", m.calls() == [f"plugin update {PLUGIN_KEY}"])
+    check("fix-only release: silent", out.strip() == "")
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta", "one", "two", "three", "four", "five", "six",
+                    "IGNORE-PREVIOUS", "evil$(curl)"])
+    out = run_hook(m)
+    check("many new skills: five shown, the rest counted", "and 1 more" in out and "/five" in out)
+    check("many new skills: plural wording", "Open a new session to use them." in out)
+    check("unsafe skill names never reach the context", "IGNORE" not in out and "curl" not in out)
+
+# --- the update is too slow here: give up for 2 hours, not for a day ------------
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta", "quicknote"])
+    m.env["FAKE_UPDATE_SLEEP"] = "3"
+    out = run_hook(m, overrides={"UPDATE_TIMEOUT_S": 1})
+    check("timeout: silent", out.strip() == "")
+    check("timeout: no reinstall attempted", not any("uninstall" in c for c in m.calls()))
+    check("timeout: retried in 2 hours", 7000 < stamp_left(m) <= 7200)
+    check("timeout: lock released", not (m.config / ".nsls-plugin-heal.lock").exists())
+
+# --- not enough of the 90s hook left: hand it to the next session --------------
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    new_release(m, ["quicknote"])
+    m.env["NSLS_HOOK_STARTED_AT"] = str(int(time.time()) - 60)
+    out = run_hook(m)
+    check("short of time: no CLI call", m.calls() == [])
+    check("short of time: the next session may check at once", stamp_left(m) <= 0)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # The Windows entry reserves only a margin: Python is the .ps1's last step
+    # and its ping is detached, so 30 seconds left is enough there.
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta", "quicknote"])
+    m.env["NSLS_HOOK_STARTED_AT"] = str(int(time.time()) - 60)
+    out = run_hook(m, reserve=5)
+    check("windows reserve: same elapsed time, the update runs", m.calls() == [f"plugin update {PLUGIN_KEY}"])
+    check("windows reserve: and announces", "/quicknote" in out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # A start time from the future or from long ago is not this hook's.
+    m = Machine(tmp)
+    new_release(m, ["alpha", "kw:beta", "quicknote"])
+    m.env["NSLS_HOOK_STARTED_AT"] = "1,5"
+    out = run_hook(m)
+    check("unreadable start time: falls back to this process's start", "/quicknote" in out)
+
+# --- the throttle -------------------------------------------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    m.stamp.write_text(f"{time.time() + 86400 * 30:.0f}\n")  # clock moved backwards
+    out = run_hook(m)
+    check("stamp far in the future: ignored, the check runs", any(c.startswith("plugin update") for c in m.calls()))
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    run_hook(m)  # heals drift, claims the next slot
+    before = len(m.calls())
+    run_hook(m)
+    check("second session within 10 minutes: no CLI call", len(m.calls()) == before)
+
+# --- offline: the remote cannot be asked --------------------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    git(m.config / "plugins" / "marketplaces" / "nsls-toolkit", "remote", "set-url", "origin",
+        str(Path(tmp) / "no-such-remote"))
+    out = run_hook(m)
+    check("offline: no CLI call, silent", m.calls() == [] and out.strip() == "")
+    check("offline: tries again in 10 minutes", 500 < stamp_left(m) <= 600)
 
 print()
 if failures:
