@@ -1618,13 +1618,177 @@ def _claude_argv(path):
     return [str(path)]
 
 
-def ensure_plugin_fresh():
-    """At most once a day, sync the installed plugin — by version AND by commit.
+# --- plugin freshness: a cheap check at every session start ------------------
+#
+# Until 3.29.0 this ran `claude plugin update` at most once a day. Measured on
+# 2026-10-17: a release took a median 19.6 hours from merge to a builder's
+# cache, and staff were told to try skills they did not have yet. The update
+# itself takes 7-11s; the wait was the daily timer. Now a sub-second question to
+# GitHub ("has main moved?") runs every session, at most once per
+# FRESH_CHECK_INTERVAL_S, and the slow update runs only when the answer is yes.
+FRESH_STAMP = CONFIG_DIR / ".nsls-plugin-fresh-check"
+# The daily marker copies before 3.29.0 used. Still touched whenever an update
+# runs here, because migrate_to_plugin.py's rescue for a copy whose CLI finder
+# has gone blind reads it: touching it keeps that rescue from running a second
+# update the same day.
+LEGACY_DAILY_MARKER = CONFIG_DIR / ".nsls-plugin-update-check"
+FRESH_CHECK_INTERVAL_S = 600         # at most one network check per 10 minutes
+FRESH_RETRY_AFTER_TROUBLE_S = 7200   # an update that timed out or failed: 2 hours
+UPDATE_TIMEOUT_S = 20                # measured 7-11s for a real update (2026-10-17)
+HEAL_TIMEOUT_S = 25
+HOOK_BUDGET_S = 90                   # the SessionStart timeout hooks.json and both installers set
+# What main() still owes after this step: the live ping, plus a margin for the
+# pointer sync and the replay. The Windows entry passes its own, smaller reserve:
+# its ping is detached and Python is the last thing that hook does.
+MAIN_RESERVE_S = PING_TIMEOUT + 10
+_HOOK_STARTED = time.time()
+# What a skill name may look like before it is echoed into the model's context.
+_SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9:-]{0,63}\Z")
 
-    Plugin installs run from a version-pinned cache that only refreshes via
-    `claude plugin update` after a plugin.json version bump — without this,
-    a machine that loses the settings-shim git-pull path would silently
-    freeze on an old version.
+
+def _hook_elapsed():
+    """Seconds since this SessionStart hook began.
+
+    The Windows .ps1 pulls, syncs pointers and pings before it starts Python, so
+    it passes its own start time (whole Unix seconds, which no locale can
+    reformat). Anything absent or implausible falls back to this process's start.
+    """
+    try:
+        elapsed = time.time() - float(os.environ.get("NSLS_HOOK_STARTED_AT", ""))
+        if 0 <= elapsed <= HOOK_BUDGET_S:
+            return elapsed
+    except ValueError:
+        pass
+    return time.time() - _HOOK_STARTED
+
+
+def _set_fresh_stamp(next_at):
+    try:
+        FRESH_STAMP.write_text(f"{int(next_at)}\n", encoding="utf-8")  # whole seconds, rounded down
+    except Exception:
+        pass
+
+
+def _claim_fresh_check(now):
+    """True when this session should ask GitHub. The slot is claimed BEFORE the
+    network call, so sessions that start together do not all ask. A stamp further
+    ahead than any interval this file sets means the clock moved backwards, and
+    is ignored rather than trusted for hours."""
+    try:
+        nxt = float(FRESH_STAMP.read_text(encoding="utf-8").strip())
+        if now < nxt <= now + FRESH_RETRY_AFTER_TROUBLE_S:
+            return False
+    except Exception:
+        pass
+    _set_fresh_stamp(now + FRESH_CHECK_INTERVAL_S)
+    return True
+
+
+def _published_head():
+    """The latest commit on the branch the marketplace clone tracks, asked of its
+    own remote (0.6-0.9s measured). None when offline, slow, or anything looks
+    wrong. Following the clone's own branch keeps a builder pinned to a test
+    branch on that branch."""
+    clone = CONFIG_DIR / "plugins" / "marketplaces" / ORG_MARKETPLACE
+    if not (clone / ".git").exists():
+        return None
+    branch = _git_out(clone, "symbolic-ref", "--short", "-q", "HEAD")
+    ref = (f"refs/heads/{branch}"
+           if re.fullmatch(r"[A-Za-z0-9._/-]{1,100}", branch or "") else "HEAD")
+    rc, out = _git_rc(clone, "ls-remote", "origin", ref, timeout=3)
+    sha = out.split()[0] if rc == 0 and out else ""
+    return sha if _SHA40.match(sha) else None
+
+
+def _marketplace_version():
+    """The version in the marketplace clone's plugin.json, validated, or None."""
+    try:
+        manifest = (CONFIG_DIR / "plugins" / "marketplaces" / ORG_MARKETPLACE
+                    / ".claude-plugin" / "plugin.json")
+        version = json.loads(manifest.read_text(encoding="utf-8-sig")).get("version")
+        return version if isinstance(version, str) and _PLUGIN_VERSION.match(version) else None
+    except Exception:
+        return None
+
+
+def _is_current(record, published):
+    """True only on evidence that the install IS the published release.
+
+    With a commit in the registry, that commit decides. Without one (older CLI
+    registries), the marketplace clone must sit at the published commit AND
+    carry the installed version; a clone refreshed by something else (say
+    `claude plugin marketplace update`) over a stale install is not evidence.
+    """
+    if record["sha"]:
+        return record["sha"] == published
+    return (_marketplace_head() == published and record["version"] != "?"
+            and record["version"] == _marketplace_version())
+
+
+def _skill_names(install_path):
+    """The skill names an install carries (frontmatter `name:`, else the folder
+    name), keeping only names that look like skill names. None if unreadable."""
+    try:
+        names = set()
+        for skill_md in (Path(install_path) / "skills").glob("*/SKILL.md"):
+            name = skill_md.parent.name
+            try:
+                head = skill_md.read_text(encoding="utf-8", errors="replace")[:4000]
+                front = re.match(r"---[ \t]*\r?\n(.*?)\r?\n---", head, re.S)
+                for line in (front.group(1).splitlines() if front else []):
+                    if line.startswith("name:"):
+                        name = line[5:].strip().strip("\"'")
+                        break
+            except Exception:
+                pass
+            if _SKILL_NAME.match(name):
+                names.add(name)
+        return names
+    except Exception:
+        return None
+
+
+def _announce_new_skills(old, after):
+    """One line for Claude to pass on, only when the release added skills.
+
+    `old` is the skill names taken before the update: a reinstall of the same
+    version replaces the old folder, so it cannot be read afterwards.
+
+    The session that ran the update loaded the old version, so a new skill is
+    not usable here until the builder opens a new session. A release that only
+    changes existing skills says nothing: the next session simply has it.
+    Names are read from the cache, so only ones matching _SKILL_NAME print.
+    """
+    new = _skill_names(after["installPath"])
+    if not old or new is None:
+        return False  # cannot compare, so say nothing rather than guess
+    added = sorted(new - old)
+    if not added:
+        return False
+    shown = ", ".join(f"/{n}" for n in added[:5])
+    if len(added) > 5:
+        shown += f" and {len(added) - 5} more"
+    it = "it" if len(added) == 1 else "them"
+    version = f" to version {after['version']}" if after["version"] != "?" else ""
+    print(
+        f"[NSLS Builder Toolkit] The toolkit just updated{version} and added "
+        f"{shown}. This session started before the update, so the new skills are "
+        f"not loaded here. At the start of your first reply, tell the builder in "
+        f"one plain sentence: \"New in the NSLS toolkit: {shown}. Open a new "
+        f"session to use {it}.\" Say nothing else about the update."
+    )
+    return True
+
+
+def ensure_plugin_fresh(reserve=MAIN_RESERVE_S):
+    """Keep the installed plugin on the published release — by version AND by commit.
+
+    Every session (at most once per FRESH_CHECK_INTERVAL_S), ask the marketplace
+    clone's remote for its latest commit and compare it with the installed one.
+    Level is the common case and costs one sub-second network call. Otherwise run
+    `claude plugin update`, but only if the hook still has time for it AND for
+    `reserve`, the work that follows (a session that is short of time hands the
+    update to the next session rather than risking the credit ping).
 
     `plugin update` compares version strings and nothing else. On 2026-09-10
     it reported "already at the latest version (3.6.0)" over a cache 37
@@ -1636,67 +1800,98 @@ def ensure_plugin_fresh():
     makes drift rare; this makes it self-correcting when two PRs bump to the
     same number and the second lands unversioned.
 
+    The update and the heal run under one lock, so two sessions starting
+    together never update or reinstall at once. An update that times out or
+    fails is retried after FRESH_RETRY_AFTER_TROUBLE_S, not the next day.
+
     Everything printed here lands in the model's context. Only our own
-    literals and validated 40-hex shas are echoed — never CLI or git output,
-    which a hostile marketplace could shape.
+    literals, validated versions, validated skill names and validated 40-hex
+    shas are echoed — never CLI or git output, which a hostile marketplace
+    could shape.
     """
     if not org_plugin_active():
         return
-    marker = CONFIG_DIR / ".nsls-plugin-update-check"
     try:
-        if marker.exists() and (
-            datetime.now(timezone.utc).timestamp() - marker.stat().st_mtime < 86400
-        ):
+        now = time.time()
+        if not _claim_fresh_check(now):
             return
+        record = _installed_plugin_record()
+        published = _published_head() if record else None
+        if not published:
+            return  # not a plugin machine, or offline: the stamp retries later
+        if _is_current(record, published):
+            return  # level: no CLI call at all
         claude = _find_claude()
         if not claude:
             return
-        marker.touch()
-        # Budget: 20s for the update (the common path — a hung update must leave
-        # room for sync_pointers and the session pings behind it), and up to 25s
-        # more for a heal, which only runs when drift is actually detected. On
-        # timeout the marker is already touched, so the next attempt is
-        # tomorrow; releases just arrive a day later on that machine.
-        deadline = time.monotonic() + 45
-        try:
-            updated = subprocess.run(
-                [*claude, "plugin", "update", ORG_PLUGIN_KEY],
-                capture_output=True, timeout=20,
-            ).returncode == 0
-        except subprocess.TimeoutExpired:
+        if HOOK_BUDGET_S - _hook_elapsed() < UPDATE_TIMEOUT_S + reserve:
+            _set_fresh_stamp(now)  # short of time: the next session does it
             return
-        if not updated:
-            # Offline, CLI lock, marketplace unreachable: whatever stopped the
-            # update would stop the reinstall too, and the reinstall starts by
-            # uninstalling. Never trade a stale toolkit for no toolkit.
-            return
-
-        record = _installed_plugin_record()
-        head = _marketplace_head()
-        if not record or not record["sha"] or not head or record["sha"] == head:
-            return  # level, or not enough evidence to act on
-
         lock = _acquire_heal_lock()
         if lock is None:
-            return  # another session is healing right now; it will announce
+            return  # another session is updating right now; it will announce
         try:
-            # Re-read BOTH sides under the lock: the other session may have just
-            # finished healing, and its `plugin update` may have advanced the
-            # marketplace clone while we waited, so a head read before the lock
-            # would misjudge the reinstall as failed (or succeeded).
-            record = _installed_plugin_record()
-            head = _marketplace_head()
-            if not record or not record["sha"] or not head or record["sha"] == head:
-                return
-            _heal_and_announce(claude, record, head, deadline, marker)
+            _update_and_heal(claude, published, reserve)
         finally:
             _release_heal_lock(lock)
     except Exception:
         pass
 
 
-def _heal_and_announce(claude, record, head, deadline, marker):
-    """Run the heal and put exactly one line in the model's context about it."""
+def _update_and_heal(claude, published, reserve):
+    """Under the lock: update, announce any new skills, then heal drift."""
+    # Re-read under the lock: another session may have just done all of this.
+    before = _installed_plugin_record()
+    if not before or _is_current(before, published):
+        return
+    old_skills = _skill_names(before["installPath"])
+    try:
+        LEGACY_DAILY_MARKER.touch()
+    except Exception:
+        pass
+    try:
+        updated = subprocess.run(
+            [*claude, "plugin", "update", ORG_PLUGIN_KEY],
+            capture_output=True, timeout=UPDATE_TIMEOUT_S, stdin=subprocess.DEVNULL,
+        ).returncode == 0
+    except Exception:  # TimeoutExpired included: too slow here, try again later
+        updated = False
+    if not updated:
+        # Offline, CLI lock, marketplace unreachable, too slow: whatever stopped
+        # the update would stop the reinstall too, and the reinstall starts by
+        # uninstalling. Never trade a stale toolkit for no toolkit.
+        _set_fresh_stamp(time.time() + FRESH_RETRY_AFTER_TROUBLE_S)
+        return
+
+    record = _installed_plugin_record()
+    announced = bool(record and before["installPath"] != record["installPath"]
+                     and _announce_new_skills(old_skills, record))
+
+    head = _marketplace_head()
+    if not record or not record["sha"] or not head or record["sha"] == head:
+        if not record or not _is_current(record, published):
+            # The update ran and the machine is still not on the published
+            # commit: a marketplace the CLI will not move. Do not repeat a no-op
+            # update every ten minutes.
+            _set_fresh_stamp(time.time() + FRESH_RETRY_AFTER_TROUBLE_S)
+        return  # level, or not enough evidence to act on
+    # The heal starts by uninstalling, so it starts only with its whole budget
+    # left: cut off halfway, it would leave the machine with no toolkit.
+    if HOOK_BUDGET_S - _hook_elapsed() - reserve < HEAL_TIMEOUT_S:
+        _set_fresh_stamp(time.time())  # the next session heals
+        return
+    deadline = time.monotonic() + HEAL_TIMEOUT_S
+    if _heal_and_announce(claude, record, head, deadline) and not announced:
+        # A release that merged without a version bump arrives through the
+        # reinstall, not the update, and can carry new skills too.
+        healed = _installed_plugin_record()
+        if healed:
+            _announce_new_skills(old_skills, healed)
+
+
+def _heal_and_announce(claude, record, head, deadline):
+    """Run the heal and put exactly one line in the model's context about it.
+    True when the reinstall succeeded."""
     old7, new7, version = record["sha"][:7], head[:7], record["version"]
     if _heal_plugin_drift(claude, record, head, deadline):
         print(
@@ -1707,15 +1902,12 @@ def _heal_and_announce(claude, record, head, deadline, marker):
             f"succeeded; the updated skills and hooks load on the next session. "
             f"Mention it to the user at a natural moment - no action needed."
         )
-        return
+        return True
 
     # The heal failed. The plugin may now be uninstalled: say so, hand over
-    # the manual steps, and clear the daily marker so the next session
-    # retries instead of waiting a day with no toolkit.
-    try:
-        marker.unlink()
-    except Exception:
-        pass
+    # the manual steps, and clear the stamp so the very next session retries
+    # instead of waiting with no toolkit.
+    _set_fresh_stamp(time.time())
     after = _installed_plugin_record()
     state = ("is currently NOT installed on this machine"
              if after is None else f"is still on commit {after['sha'][:7] if after['sha'] else '?'}")
@@ -1728,6 +1920,7 @@ def _heal_and_announce(claude, record, head, deadline, marker):
         f"delete the cache directory under ~/.claude/plugins/cache/{ORG_MARKETPLACE}/), "
         f"then start a new session. The hook will retry on the next session."
     )
+    return False
 
 
 def sync_pointers():
@@ -2775,11 +2968,13 @@ if __name__ == "__guardrails__":
     # plugin install never ran `plugin update` and its version-pinned cache
     # rotted while the clone beside it stayed current. ensure_plugin_fresh
     # gates on the plugin being installed and enabled, so a clone-only
-    # machine is a designed no-op; where both hook paths fire, the daily
-    # marker and the heal lock make the second run harmless.
+    # machine is a designed no-op; where both hook paths fire, the check stamp
+    # and the update lock make the second run harmless. Python is the last
+    # thing the .ps1 does and its ping is detached, so the only reserve is a
+    # margin; the .ps1's own start time arrives in NSLS_HOOK_STARTED_AT.
     try:
         if not stage_a:  # stage A spent this session's freshness budget
-            ensure_plugin_fresh()
+            ensure_plugin_fresh(reserve=5)
     except Exception:
         pass
 
