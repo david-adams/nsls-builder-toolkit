@@ -231,7 +231,7 @@ def test_session_ping_flags_collector_backed_when_fresh():
         assert body["builder_email"] == "builder@nsls.org"
         assert body["github_username"] == "builder"
         assert set(body) == {"builder_email", "toolkit", "github_username",
-                             "platform", "collector_backed"}, body
+                             "platform", "toolkit_version", "collector_backed"}, body
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -245,7 +245,7 @@ def test_session_ping_unflagged_when_stale_missing_or_malformed():
             body = _ping_payload(tmp)
             assert "collector_backed" not in body, f"{name}: {body}"
             assert set(body) == {"builder_email", "toolkit", "github_username",
-                                 "platform"}, f"{name}: {body}"
+                                 "platform", "toolkit_version"}, f"{name}: {body}"
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
