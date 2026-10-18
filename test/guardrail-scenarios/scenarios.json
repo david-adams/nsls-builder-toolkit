@@ -15,7 +15,11 @@
     "",
     "The bias of this suite is deliberate: far more allow-cases than block-cases.",
     "A gate that fires when it shouldn't teaches builders to route around the",
-    "toolkit, and then it protects nobody."
+    "toolkit, and then it protects nobody.",
+    "",
+    "The hook half runs in CI on Mac and Linux, so a path in a command must exist",
+    "on both (/tmp, never macOS's /private/tmp). Where a cd target is missing, the",
+    "gate rightly judges the command in the original repo and an allow-case blocks."
   ],
   "hook": [
     {
@@ -562,7 +566,7 @@
       },
       "tracker_stub": "empty",
       "input": {
-        "command": "cd /private/tmp && railway up"
+        "command": "cd /tmp && railway up"
       }
     },
     {
@@ -575,7 +579,7 @@
         "readme": "# MEx tools \u2014 pulls member data from HubSpot into Airtable"
       },
       "input": {
-        "command": "cd /private/tmp && git push origin main"
+        "command": "cd /tmp && git push origin main"
       }
     },
     {
