@@ -1723,20 +1723,23 @@ def _skill_names(install_path):
         return None
 
 
-def _announce_new_skills(before, after):
+def _announce_new_skills(old, after):
     """One line for Claude to pass on, only when the release added skills.
+
+    `old` is the skill names taken before the update: a reinstall of the same
+    version replaces the old folder, so it cannot be read afterwards.
 
     The session that ran the update loaded the old version, so a new skill is
     not usable here until the builder opens a new session. A release that only
     changes existing skills says nothing: the next session simply has it.
     Names are read from the cache, so only ones matching _SKILL_NAME print.
     """
-    old, new = _skill_names(before["installPath"]), _skill_names(after["installPath"])
+    new = _skill_names(after["installPath"])
     if not old or new is None:
-        return  # cannot compare, so say nothing rather than guess
+        return False  # cannot compare, so say nothing rather than guess
     added = sorted(new - old)
     if not added:
-        return
+        return False
     shown = ", ".join(f"/{n}" for n in added[:5])
     if len(added) > 5:
         shown += f" and {len(added) - 5} more"
@@ -1749,6 +1752,7 @@ def _announce_new_skills(before, after):
         f"one plain sentence: \"New in the NSLS toolkit: {shown}. Open a new "
         f"session to use {it}.\" Say nothing else about the update."
     )
+    return True
 
 
 def ensure_plugin_fresh(reserve=MAIN_RESERVE_S):
@@ -1815,6 +1819,7 @@ def _update_and_heal(claude, published, reserve):
     before = _installed_plugin_record()
     if not before or (before["sha"] or _marketplace_head()) == published:
         return
+    old_skills = _skill_names(before["installPath"])
     try:
         LEGACY_DAILY_MARKER.touch()
     except Exception:
@@ -1834,8 +1839,8 @@ def _update_and_heal(claude, published, reserve):
         return
 
     record = _installed_plugin_record()
-    if record and before["installPath"] != record["installPath"]:
-        _announce_new_skills(before, record)
+    announced = bool(record and before["installPath"] != record["installPath"]
+                     and _announce_new_skills(old_skills, record))
 
     head = _marketplace_head()
     if not record or not record["sha"] or not head or record["sha"] == head:
@@ -1850,11 +1855,17 @@ def _update_and_heal(claude, published, reserve):
         _set_fresh_stamp(time.time())  # the next session heals
         return
     deadline = time.monotonic() + min(HEAL_TIMEOUT_S, left)
-    _heal_and_announce(claude, record, head, deadline)
+    if _heal_and_announce(claude, record, head, deadline) and not announced:
+        # A release that merged without a version bump arrives through the
+        # reinstall, not the update, and can carry new skills too.
+        healed = _installed_plugin_record()
+        if healed:
+            _announce_new_skills(old_skills, healed)
 
 
 def _heal_and_announce(claude, record, head, deadline):
-    """Run the heal and put exactly one line in the model's context about it."""
+    """Run the heal and put exactly one line in the model's context about it.
+    True when the reinstall succeeded."""
     old7, new7, version = record["sha"][:7], head[:7], record["version"]
     if _heal_plugin_drift(claude, record, head, deadline):
         print(
@@ -1865,7 +1876,7 @@ def _heal_and_announce(claude, record, head, deadline):
             f"succeeded; the updated skills and hooks load on the next session. "
             f"Mention it to the user at a natural moment - no action needed."
         )
-        return
+        return True
 
     # The heal failed. The plugin may now be uninstalled: say so, hand over
     # the manual steps, and clear the stamp so the very next session retries
@@ -1883,6 +1894,7 @@ def _heal_and_announce(claude, record, head, deadline):
         f"delete the cache directory under ~/.claude/plugins/cache/{ORG_MARKETPLACE}/), "
         f"then start a new session. The hook will retry on the next session."
     )
+    return False
 
 
 def sync_pointers():

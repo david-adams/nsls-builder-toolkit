@@ -107,6 +107,11 @@ FAKE_CLAUDE = textwrap.dedent('''\
         reg.write_text(json.dumps(d))
         Path(os.environ["FAKE_INSTALL_PATH"]).mkdir(parents=True, exist_ok=True)
         (Path(os.environ["FAKE_INSTALL_PATH"]) / "fresh").write_text("1")
+        for name in os.environ.get("FAKE_INSTALL_SKILLS", "").split(","):
+            if name:
+                d = Path(os.environ["FAKE_INSTALL_PATH"]) / "skills" / name
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "SKILL.md").write_text(f"---\\nname: {name}\\n---\\n")
     sys.exit(0)
 ''')
 
@@ -551,6 +556,21 @@ with tempfile.TemporaryDirectory() as tmp:
     check("many new skills: five shown, the rest counted", "and 1 more" in out and "/five" in out)
     check("many new skills: plural wording", "Open a new session to use them." in out)
     check("unsafe skill names never reach the context", "IGNORE" not in out and "curl" not in out)
+
+# --- a release that merged without a bump arrives by reinstall: still announced
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    m.env["FAKE_INSTALL_SKILLS"] = "alpha,kw:beta,second-opinion"
+    out = run_hook(m)
+    check("unbumped release: healed", m.registry_sha() == m.head)
+    check("unbumped release: new skill announced after the reinstall", "/second-opinion" in out)
+    check("unbumped release: old skills not listed", "/alpha" not in out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    m = Machine(tmp)
+    m.env["FAKE_INSTALL_SKILLS"] = "alpha,kw:beta"
+    out = run_hook(m)
+    check("unbumped, no new skills: only the refresh notice", "refreshed" in out.lower() and "New in the NSLS toolkit" not in out)
 
 # --- the update is too slow here: give up for 2 hours, not for a day ------------
 with tempfile.TemporaryDirectory() as tmp:
