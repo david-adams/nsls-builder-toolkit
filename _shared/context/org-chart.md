@@ -1,5 +1,5 @@
 # NSLS Org Chart
-_Last synced: 2026-10-12_
+_Last synced: 2026-10-19_
 
 ## Business Intelligence
 
