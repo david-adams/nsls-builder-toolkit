@@ -81,7 +81,7 @@ add `--allow-production` on your own initiative.
 ## Rules (checked locally before any network call)
 
 - **`--target` is required** (`public|library|room`); it is never defaulted, so nothing goes world-readable by accident.
-- **Slug** (public only): `^[a-z0-9]+(?:-[a-z0-9]+)*$`, max 80, `ph` reserved.
+- **Slug** (public only): `^[a-z0-9]+(?:-[a-z0-9]+)*$`, max 80, `ph` and `d` reserved (`d` is docs.nsls.org's share-link and library prefix).
 - **Title** required, max 200. **Description** optional, max 2000.
 - **Size:** the practical limit is ~6 MB per REQUEST (the dashboard sits behind CloudFront/Lambda), not the server's 25 MB document cap. Binary content goes base64 (+33%), so a **PDF over ~4 MB is too big**; the CLI refuses locally above ~5.5 MB encoded. Shrink it or host it elsewhere and publish a `--kind link`. PDF and built-PDF artifacts are sent base64; HTML as text. HTML must start with `<!doctype html>` or `<html>`; a PDF must have a `%PDF-` header.
 - **Links** must be `http(s)`.

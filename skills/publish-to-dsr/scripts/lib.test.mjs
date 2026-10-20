@@ -35,6 +35,8 @@ test("public: defaults, slug, file", () => {
   assert.match(v({ target: "public", title: "T", file: "p.html" }), /slug/);
   assert.match(v({ target: "public", title: "T", slug: "Bad", file: "p.html" }), /invalid/);
   assert.match(v({ target: "public", title: "T", slug: "ph", file: "p.html" }), /reserved/);
+  assert.equal(validateSlug("d"), 'Slug "d" is reserved. Pick another.');
+  assert.match(v({ target: "public", title: "T", slug: "d", file: "p.html" }), /reserved/);
   assert.match(v({ target: "public", title: "T", slug: "ok" }), /--file/);
   assert.match(v({ target: "public", kind: "pdf", title: "T", slug: "ok", file: "p" }), /only supports --kind html/);
   assert.match(v({ target: "public", title: "T", slug: "ok", file: "p.html", visibility: "room" }), /not allowed here/);

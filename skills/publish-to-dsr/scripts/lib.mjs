@@ -8,7 +8,7 @@
 
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const SLUG_MAX = 80;
-export const RESERVED_SLUGS = new Set(["ph"]);
+export const RESERVED_SLUGS = new Set(["ph", "d"]);
 export const TITLE_MAX = 200;
 export const DESCRIPTION_MAX = 2000;
 export const URL_MAX = 2048;
