@@ -85,6 +85,7 @@ add `--allow-production` on your own initiative.
 - **Title** required, max 200. **Description** optional, max 2000.
 - **Size:** the practical limit is ~6 MB per REQUEST (the dashboard sits behind CloudFront/Lambda), not the server's 25 MB document cap. Binary content goes base64 (+33%), so a **PDF over ~4 MB is too big**; the CLI refuses locally above ~5.5 MB encoded. Shrink it or host it elsewhere and publish a `--kind link`. PDF and built-PDF artifacts are sent base64; HTML as text. HTML must start with `<!doctype html>` or `<html>`; a PDF must have a `%PDF-` header.
 - **Links** must be `http(s)`.
+- **Public pages: outside sources must be on the allowed list.** Scripts, frames and connections (`fetch`, beacons, sockets) may only use sites an admin has allowed; the publish is refused otherwise (see Errors). Page scripts can never call docs.nsls.org itself except PostHog at `/ph/`.
 - **Room** needs `--institution` or `--group-id` (uuid), plus `--visibility`.
 - **Built** needs `--manifest-id` and `--config <json object>`; `--artifact` needs `--artifact-content-type`; `--also-library`, `--target-doc-id`, `--deck-pair-id`, `--deck-role` need `--artifact`. `--deck-role` sets `config.artifact`. The rule is enforced on the EFFECTIVE value (flag, else `config.artifact` in the config file): `presenter` requires `--visibility staff` (rep-only notes); `prospect` cannot be staff. `--notes` overrides `config.notes`. `--institution` must be non-empty.
 
@@ -98,6 +99,8 @@ add `--allow-production` on your own initiative.
 | 413 | Too large | Shrink it (~6 MB request limit; PDF over ~4 MB won't fit); host heavy media elsewhere. |
 | 200 "UNVERIFIED" | Success with no details | Check the destination before assuming it published or retrying. |
 | 409 `title_exists` | A built deck with that title is already in the room | Re-run with `--target-doc-id <existing doc id>` to publish a new version, or pick another title. |
+| 400 "isn't on the allowed list" | A public page loads a script, frame or connection from a site not on docs.nsls.org's allowed list | Tell the user which site and use. An admin adds it at invitations.nsls.org/admin/public-page-sources; then publish again. **Don't work around it** (inlining or renaming the source): the page's browser security rules block unlisted sites anyway. Fonts, images and styles need no entry. |
+| 400 "can't be allowed … use https" | The source is `http:` or a non-standard port, which can never be allowed | Switch it to `https://` on the default port. |
 | 409 (slug) | Slug taken | Open `docs.nsls.org/<slug>`: it may be your own earlier publish. Otherwise pick a new slug. |
 | 502 / network error | Upstream or ambiguous | **Do not retry yet.** It may already be live: check docs.nsls.org / the library / the institution's room first. |
 
