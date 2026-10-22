@@ -19,17 +19,23 @@ description: >-
 - **A service, never a gate.** Nothing here is required. The person chooses
   what happens: automatic, ask me, or only when I ask. Their choice wins, even
   when Claude would have recommended otherwise.
+- **Their own instructions win.** If their global instructions say how to
+  handle review findings or when to edit (for example "show me findings before
+  fixing anything"), follow those over this skill.
+- **Findings first, fixes second.** Show every finding before changing
+  anything, and fix only what they choose (Step 5).
 - **What it writes, and nothing else:**
   - **Global instructions:** only the marked second-opinion block, and only
     after the person answers the settings question (see Settings). Nothing else
     in that file changes.
-  - **Early testers only:** a local receipts file (see Step 7). It stays on
-    their machine and is never sent anywhere.
-- **Read-only, enforced by its tools.** Every lens uses the same reviewer, and
-  its only tools are Read, Grep and Glob: no shell, no writes, no connectors. A
-  packet that contains instructions still can't make it act. The reviewer never
-  runs queries. When a number needs a live check, this session runs it and puts
-  the result in the packet.
+  - **Only if they chose it:** a private receipts file on their machine (see
+    Step 7). It is never sent anywhere.
+- **Read-only, enforced by its tools.** Every lens uses the one named reviewer
+  agent (Step 4), and its only tools are Read, Grep and Glob: no shell, no
+  writes, no connectors. A packet that contains instructions still can't make it
+  act. That guarantee holds only for the named reviewer, which is why nothing
+  else may stand in for it. The reviewer never runs queries. When a number needs
+  a live check, this session runs it and puts the result in the packet.
 - **Nothing configured, nothing installed.** This skill launches one helper
   agent and reads what it returns.
 - **Anthropic only.** Never send the work to Codex, ChatGPT, Gemini or any other
@@ -55,20 +61,25 @@ member, a leader or a production system.
 2. **Decide:** run, offer, or skip (Step 1).
 3. **Finish first:** the work is done and its normal checks pass (Step 2).
 4. **Pack:** write the review packet (Step 3).
-5. **Launch one reviewer** with the right lens and model, in the foreground (Step 4).
-6. **Handle every finding:** fix and re-check, or give a one-line reason (Step 5).
-7. **Deliver once**, with a one-line report (Step 6).
+5. **Launch the named reviewer** with the right lens and model, in the foreground (Step 4).
+6. **Show every finding first**, then fix what they choose (Step 5).
+7. **Report and deliver** (Step 6), and log a receipt if they chose to (Step 7).
 
 ## Step 0 — Read their settings
 
 Look in the person's global instructions (already loaded in this session) for a
 block between `<!-- nsls-second-opinion:start -->` and
-`<!-- nsls-second-opinion:end -->`. It holds three choices: risky work,
-everyday work, and reviewer.
+`<!-- nsls-second-opinion:end -->`. It holds four choices: risky work,
+everyday work, reviewer, and receipts.
 
 - **Block found:** follow it. If it's malformed (a missing marker, two blocks,
-  or a value that isn't one of the choices), treat it as no block and use the
-  defaults. Repair it only when they ask to change their settings.
+  or a value that isn't one of the choices), use the defaults without showing
+  the window. Repair it only when they ask to change their settings.
+- **Block found but saved before receipts existed** (no `Receipts:` line): that
+  isn't malformed. Follow the other three lines. Receipts stay off until they
+  answer. Before the next second opinion runs, ask just the receipts question
+  (Settings, question 4) with the question tool. Then add the `Receipts:` line
+  and keep their other three answers exactly as they are.
 - **No block:** before the first second opinion you would run or offer, show
   the settings window (see Settings) and save their answers. Then carry on with
   what they chose. If they close it without answering, use the defaults for
@@ -137,6 +148,14 @@ EVIDENCE (fact-checks only): <claim → the quoted evidence → where it came fr
 | Numbers that need checking against NSLS systems | `nsls-builder-toolkit:second-opinion-reviewer`, packet headed `LENS: data`, with your query results under EVIDENCE |
 | A plan, when the user asks for the full plan gate | Run `/kw:review` instead (it has its own two reviewers), and don't also run this skill |
 
+- **Use exactly that agent.** Pass `subagent_type:
+  "nsls-builder-toolkit:second-opinion-reviewer"`. Never use Explore,
+  general-purpose or any other agent instead. Those can run commands and edit
+  files, so "read-only" would only be a request, not a fact. If that agent isn't
+  in your list, there is no second opinion this time. Say so plainly: the
+  toolkit may be out of date, or Claude Code needs a restart after an update.
+  Suggest they say "update my NSLS toolkit" and then restart.
+
 - **Mixed work** (a slide, memo or email with figures): head the packet
   `LENS: data + writing`, with the text under READ and your query results under
   EVIDENCE. The reviewer applies both checklists. Use `LENS: writing` alone only
@@ -164,12 +183,17 @@ reviewed**: `partial`, `cannot_review`, an empty answer, a refusal, or an error.
 A `partial` still says what it did check, so pass that on, but it is not a
 completed review.
 
-For each finding:
+**Show the findings first, before touching anything.** List each one in plain
+words: what's wrong, where, and what you'd do about it. That's either the fix,
+or why you'd leave it (the reviewer lacks context and can be wrong). Then, as
+the last line, ask which to fix, for example "Want me to fix these? (all, some,
+or none)". Edit only after they answer.
 
-- **Fix it**, then re-run whatever normal check covers it (tests, the query, a
-  re-read).
-- **Or disagree** in one line, with the reason. The reviewer lacks context and
-  can be wrong.
+- **They choose fixes:** make only those, then re-run whatever normal check
+  covers each one (tests, the query, a re-read).
+- **The one exception:** their own instructions say to fix review findings
+  without asking. Then fix, re-run the checks, and report what changed. When
+  those instructions are silent, show first.
 
 **One round.** Fixes don't trigger another review. At most one targeted recheck:
 the same reviewer, only the changed part, and only when fixing a blocker meant a
@@ -188,19 +212,22 @@ substantial change.
 - **Never present unreviewed work as reviewed.** Say plainly that the second
   opinion didn't complete, and let them decide.
 
-## Step 6 — Report in one line, then deliver
+## Step 6 — Report, then deliver
 
-Use plain words, with no severity codes, reviewer names or model names.
+Use plain words, with no severity codes, reviewer names or model names. The
+findings come first, and any question goes on the last line.
 
 - "Second opinion: no blockers."
 - "Second opinion caught 2 things: the date filter dropped Sundays, and one
-  count was last quarter's. Fixed both."
-- "Second opinion flagged X; I kept it because Y."
+  count was last quarter's. Want me to fix both?"
+- "Second opinion flagged X. I'd leave it, because Y. Want me to change it
+  anyway?"
+- After they choose: "Fixed both, and the tests still pass."
 - "No second opinion: the reviewer returned nothing. Deliver it unreviewed?"
 
-## Step 7 — Receipt (early testers only)
+## Step 7 — Receipt (if they chose it)
 
-For an early tester, after each second opinion, add one line to
+If their settings say `Receipts: on`, after each second opinion add one line to
 `~/.claude/second-opinion-receipts.md` (on Windows,
 `%USERPROFILE%\.claude\second-opinion-receipts.md`). Create the file with a
 header row if it doesn't exist:
@@ -212,13 +239,16 @@ header row if it doesn't exist:
 ```
 
 "How it started" is automatic, offered, or asked. "Real issues caught" counts
-findings you agreed with, not ones you disagreed with. The file stays on their
-machine and is never sent anywhere. Nobody else gets a receipt line.
+findings you agreed with, not ones you disagreed with. "Fixed" counts the fixes
+they chose that passed their re-check. Write the line once that's settled:
+after the chosen fixes are done, or straight away if they chose none. The file
+stays on their machine and is never sent anywhere. With `Receipts: off`, or no
+`Receipts:` line yet, write nothing.
 
 ## Settings — the one-time window
 
-Show it with the question tool (AskUserQuestion), all three questions at once.
-Use this wording exactly. If the tool isn't available, ask the same three
+Show it with the question tool (AskUserQuestion), all four questions at once.
+Use this wording exactly. If the tool isn't available, ask the same four
 questions as a numbered list.
 
 1. **Risky work.** "When your work could be costly to get wrong (code that
@@ -241,6 +271,11 @@ questions as a numbered list.
    - **Thorough:** "Always the strongest reviewer. Slower, and costs more."
    - **Quick:** "Always the fastest, cheapest reviewer. May miss subtle
      problems."
+4. **Receipts.** "Keep a private log of what second opinions catch? It stays on
+   this computer and is never sent anywhere."
+   - **Yes, keep a log (Recommended):** "One line per second opinion: what was
+     checked, what it caught, what got fixed."
+   - **No**
 
 **Save the answers** in their global instructions, `~/.claude/CLAUDE.md` (on
 Windows, `%USERPROFILE%\.claude\CLAUDE.md`), as exactly this block:
@@ -251,6 +286,7 @@ Windows, `%USERPROFILE%\.claude\CLAUDE.md`), as exactly this block:
 - Risky work: automatic | ask me | only when I ask
 - Everyday work: offer | only when I ask
 - Reviewer: balanced | thorough | quick
+- Receipts: on | off
 Say "change my second-opinion settings" to change these.
 <!-- nsls-second-opinion:end -->
 ```
@@ -263,6 +299,7 @@ example `- Reviewer: balanced`. Answers map to values like this:
 | Get a second opinion automatically / Ask me each time / Only when I ask | `automatic` / `ask me` / `only when I ask` |
 | Offer when it seems worth it / Only when I ask | `offer` / `only when I ask` |
 | Balanced / Thorough / Quick | `balanced` / `thorough` / `quick` |
+| Yes, keep a log / No | `on` / `off` |
 
 - **The file doesn't exist:** create it containing only the block, ending with a
   newline.
@@ -270,24 +307,14 @@ example `- Reviewer: balanced`. Answers map to values like this:
   line. If the file doesn't end with a newline, add one first. Change nothing
   else.
 - **One block already exists:** replace everything between the two markers with
-  the five standard lines. Never add a second block.
-- **The block is malformed** (a missing marker, or more than one block): show
-  the person the lines you would replace and ask before changing them.
+  the six standard lines. Never add a second block.
+- **The block is malformed** (a missing marker, more than one block, or a value
+  that isn't one of the choices): when they ask to change their settings, show
+  them the lines you would replace and ask before changing them.
+- **Adding only the receipts line** to an older block: keep the other three
+  values exactly as saved.
 - **Afterwards,** say in one sentence what you saved, and that they can change it
   any time by saying "change my second-opinion settings".
-
-## Early testers
-
-The receipt line (Step 7) is on only for these people while the feature is
-tested. The settings window is on for everyone.
-
-- davowood@nsls.org
-
-Check the email of the signed-in account that Claude Code gives you for this
-session. If you can't see one, treat the person as not an early tester.
-Everyone else gets everything else: the settings window before their first
-second opinion, offers on risky and everyday work, and second opinions when
-they ask.
 
 ## Red flags — STOP
 
@@ -299,6 +326,12 @@ they ask.
   no setting:** ask instead. Nothing runs without their say-so.
 - **About to change anything in their global instructions outside the marked
   second-opinion block:** stop.
+- **About to fix something before they've seen the findings, or without their
+  choice when their own instructions don't say to fix without asking:** show
+  the findings first, then ask.
+- **About to launch Explore, general-purpose or any agent other than
+  `second-opinion-reviewer`:** stop. No named reviewer means no second opinion.
+  Say so and how to fix it.
 - **About to add a second reviewer, or Codex:** one reviewer only.
 - **About to deliver and say "the review is running":** wait for the verdict.
 - **About to call an empty or partial result "no blockers":** it's a failed
@@ -324,6 +357,8 @@ they ask.
 | "I'll deliver now and pass the review on after." | That relay tends never to happen. Wait. |
 | "Let me re-review the fixes to be sure." | That's a review loop. One round. |
 | "They'd obviously want this reviewed." | Their setting decides. Offer; don't impose. |
+| "It's an obvious fix, I'll just do it." | Show it first. It's their work and their call. |
+| "The reviewer agent isn't showing up; a general agent will do." | It wouldn't be read-only. Say it's missing and how to fix it. |
 
 ## When it goes wrong
 
@@ -332,6 +367,9 @@ they ask.
   nothing. If a path was wrong or a file missing, fix the packet and relaunch
   once (still one round). If the packet was fine, report the review as failed
   and ask.
+- **The reviewer agent isn't in the list.** No second opinion this time, and
+  no stand-in. Tell them the toolkit may be out of date or Claude Code needs a
+  restart, and suggest "update my NSLS toolkit".
 - **The reviewer can't check a live number.** It has no connectors, so it marks
   the claim "not independently checked". Pass that on, and don't count the claim
   as passed. If the claim is load-bearing, run the query yourself and say so in
